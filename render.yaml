@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: mtg-vibes
+    runtime: docker
+    plan: free
+    healthCheckPath: /healthz
+    autoDeploy: false
+    envVars:
+      - key: MTG_SITE_PASSWORD
+        generateValue: true
+      - key: MTG_OPENAI_API_KEY
+        sync: false
+      - key: MTG_OPENAI_MODEL
+        value: gpt-4.1-mini
