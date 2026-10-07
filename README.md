@@ -63,3 +63,15 @@ The separate `/playtest` page provides library, hand, battlefield, command zone,
 Images now use the authenticated `/api/card-image` route. The server retrieves approved Scryfall JPEGs and caches them in the ignored `.card-images/` directory; the browser loads them from the app origin. Retry images is available when downloads fail. Render may clear this cache during redeployments.
 
 OpenAI 429 errors are categorized: insufficient quota requires checking API credits, billing, and project limits; temporary provider rate limits advise waiting. Site rate limits are separate. These messages do not repair missing API quota, and ChatGPT subscriptions do not supply API credits.
+
+## Focused workspace and controls
+
+The homepage is Libby chat. `/upload` is deck import and editing; `/analyze` has image, text, and statistics views; `/playtest` is a fitted goldfishing workspace with a persistent hand tray. Large lists scroll within their own panels rather than extending the whole page. The theme uses navy, violet, and warm accents.
+
+Drag a card between hand, battlefield, graveyard, exile, command zone, or library. A library drop puts the card on top; Shift-drop puts it on the bottom. Touch dragging and click-plus-move controls are also available. Hover hotkeys: P battlefield, H hand, G graveyard, X exile, L library top, B library bottom, C command, T tap/untap, V enlarge, +/- counters. Global D draws, N advances turn, and U undoes. Hotkeys do not run inside text fields or the card viewer.
+
+In Upload decks, select a cover card or upload PNG/JPEG/WebP artwork under 5 MB. Custom artwork is resized locally and saved with the deck in this browser; it is not sent to OpenAI. Browser storage can fill; keep deck-list backups. These text backups do not include artwork.
+
+Statistics use Scryfall metadata, counting front-face lands separately from flexible land back faces. The standard opening-hand check reports exact probabilities of exactly or at least three lands plus a nonland spell with mana value at most two in seven cards, before mulligans. Commander is excluded. Incomplete card data never produces invented odds. These calculations work without an OpenAI key or available quota. Free-form AI conversation still requires usable OpenAI API credentials and quota.
+
+**Check AI** sends one short model request and reports the result. An unclassified provider 429 is not labeled temporary. Check API billing/usage and the key’s project when quota is unavailable. The optional browser regression test is `PLAYWRIGHT_BROWSERS_PATH=/tmp/mtg-playwright python tests/browser_smoke.py` with Playwright, its Chromium browser, and Pillow installed; set MTG_TEST_URL to the running development server.

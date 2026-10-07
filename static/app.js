@@ -31,13 +31,17 @@ function storeConversation(){if(typeof sessionStorage!=='undefined')try{sessionS
 $('#clear-chat').onclick = () => resetConversation();
 const make = (tag, text, cls) => { const el = document.createElement(tag); el.textContent = text; if (cls) el.className = cls; return el; };
 function tab(id) {
+  const routes={chat:'/',deck:'/upload',analyze:'/analyze',play:'/playtest'};
   if(typeof window!=='undefined') {
-    const tablePage=window.location.pathname.startsWith('/playtest');
-    if(id==='play' && !tablePage) { window.location.href='/playtest'; return; }
-    if(id!=='play' && tablePage) { window.location.href='/?view='+id; return; }
+    const path=window.location.pathname.replace(/\/$/,'') || '/';
+    const target=routes[id] || '/';
+    if(path!==target){window.location.href=target;return;}
+    document.body.dataset.page=id;
   }
-  document.querySelectorAll('.tab').forEach(e => e.hidden = e.id !== id); document.querySelectorAll('[data-tab]').forEach(e => { e.classList.toggle('selected', e.dataset.tab === id); e.setAttribute?.('aria-current', e.dataset.tab === id ? 'page' : 'false'); });
+  document.querySelectorAll('.tab').forEach(e=>e.hidden=e.id!==id);
+  document.querySelectorAll('[data-tab]').forEach(e=>{e.classList.toggle('selected',e.dataset.tab===id);e.setAttribute?.('aria-current',e.dataset.tab===id?'page':'false');});
 }
+
 document.querySelectorAll('[data-tab]').forEach(e => e.onclick = () => tab(e.dataset.tab));
 function parseList(text) {
   const cards = new Map(); let excluded = false;
@@ -77,6 +81,7 @@ function analysisText() {
 }
 function renderDeck() {
   $('#workspace-name').textContent = deck.name;
+  if(typeof renderDeckBrowser==='function')renderDeckBrowser();
   $('#active-name').textContent = deck.name; $('#active-count').textContent = `${count()} cards · ${deck.commander || 'Commander not set'}`;
   $('#analysis').replaceChildren(make('h2','Deck fundamentals'),make('p',analysisText(),'message'));
   const btn = make('button','Fetch card data from Scryfall'); btn.onclick = loadCards; $('#analysis').append(btn);
@@ -92,7 +97,7 @@ function saveLibrary() {
 function renderLibrary() {
   $('#sidebar-decks').replaceChildren();
   if(!savedDecks.length) $('#sidebar-decks').append(make('p','Your decks will appear here.','muted'));
-  savedDecks.forEach(saved=>{ const button=make('button',saved.name,saved.id===editingId?'selected':''); button.onclick=()=>{if(saved.id!==editingId){activateDeck(saved);saveLibrary();}}; $('#sidebar-decks').append(button); });
+  savedDecks.forEach(saved=>{ const button=make('button','',saved.id===editingId?'selected':''); const thumb=make('img','');thumb.alt='';thumb.src=saved.coverData || '/api/card-image?name='+encodeURIComponent(saved.coverCard || saved.commander || saved.cards[0].name);thumb.onerror=()=>{thumb.hidden=true;};button.append(thumb,make('span',saved.name)); button.onclick=()=>{if(saved.id!==editingId){activateDeck(saved);saveLibrary();}}; $('#sidebar-decks').append(button); });
   const select = $('#saved-decks'); select.replaceChildren();
   if (!savedDecks.length) select.append(make('option','No saved decks yet'));
   for (const saved of savedDecks) { const option = make('option',saved.name); option.value = saved.id; select.append(option); }
@@ -106,6 +111,8 @@ function activateDeck(value) {
   $('#deck-name').value = value?.name || '';
   $('#commander').value = value?.commander || '';
   $('#moxfield-url').value = value?.sourceUrl || '';
+  $('#cover-card').value=value?.coverCard || '';
+  if(typeof setCoverDraft==='function')setCoverDraft(value?.coverData || '');
   $('#list').value = value?.cards.map(c=>`${c.quantity} ${c.name}`).join('\n') || '';
   $('#import-error').textContent = '';
   if (value) renderDeck();
@@ -117,7 +124,7 @@ $('#manage-decks').onclick = () => tab('deck');
 $('#quick-add').onclick = () => { activateDeck(null); tab('deck'); $('#deck-name').focus(); };
 $('#play-import').onclick = () => tab('deck');
 $('#quick-analyze').onclick = () => { tab('chat'); send('Libby, analyze my active deck. Explain its game plan, strengths, weaknesses, and possible improvements.'); };
-$('#libby').onclick = () => { $('#prompt').focus(); $('#chat-form').scrollIntoView({behavior:'smooth',block:'center'}); };
+$('#libby').onclick = () => { $('#prompt').focus();  };
 $('#sidebar-add').onclick=()=>{activateDeck(null);tab('deck');};
 $('#quick-play').onclick = () => { tab('play'); if(deck && !playStarted) newHand(); };
 $('#new-deck').onclick = () => { activateDeck(null); tab('deck'); $('#deck-name').focus(); };
@@ -155,10 +162,10 @@ $('#import-form').onsubmit = e => {
     const cards = parseList($('#list').value), commander = $('#commander').value.trim();
     if (commander && !cards.some(c=>c.name.toLowerCase() === commander.toLowerCase())) throw new Error('Include your commander in the pasted list.');
     if(savedDecks.length>=30 && !editingId) throw new Error('You can save up to 30 decks on this device. Download a backup before deleting an older deck.');
-    const next = {id: editingId || crypto.randomUUID(), name: $('#deck-name').value.trim() || 'Commander deck', commander, sourceUrl: moxfieldUrl($('#moxfield-url').value), cards};
+    const next = {id: editingId || crypto.randomUUID(), name: $('#deck-name').value.trim() || 'Commander deck', commander, sourceUrl: moxfieldUrl($('#moxfield-url').value), cards,coverCard:$('#cover-card').value.trim(),coverData:typeof coverDraft!=='undefined'?coverDraft:deck?.coverData || ''};
     const index = savedDecks.findIndex(d=>d.id===next.id);
     if(index<0) savedDecks.push(next); else savedDecks[index]=next;
-    activateDeck(next); saveLibrary(); $('#import-error').textContent='Deck saved. Use Playtest to draw an opening hand.';
+    activateDeck(next); const persisted=saveLibrary(); $('#import-error').textContent=persisted?'Deck saved. Open Deck analysis or Playtest from the menu.':'Deck loaded, but browser storage is full. Download your list before leaving this page.';
   } catch(error) { $('#import-error').textContent = error.message; }
 };
 function shuffle(cards) {
@@ -183,6 +190,7 @@ function renderHand() {
     card.setAttribute?.('aria-label',bottomNeeded ? `Put ${name} on the bottom` : `View ${name}`);
     const img = make('img',''); img.alt = name; img.loading = 'eager'; img.hidden = true;
     card.append(img); card.append(make('span',name,'card-name'));
+    if(typeof wireGameCard==='function')wireGameCard(card,'hand',index);
     img.onload=()=>{img.hidden=false;}; img.onerror=()=>{img.hidden=true; $('#image-status').textContent='An image could not load. Click Retry images to try again.';}; img.src='/api/card-image?name='+encodeURIComponent(name);
     card.onclick = () => { if(bottomNeeded) { if(typeof checkpoint==='function')checkpoint(); library.push(hand.splice(index,1)[0]); bottomNeeded--; renderHand(); } else if(typeof selectGameCard==='function') selectGameCard('hand',index); else showCard(name); };
     $('#hand').append(card);
@@ -232,7 +240,7 @@ async function send(prompt) {
     chatBusy = true; const currentDeck=deck, currentEpoch=chatEpoch;
     const button = $('#chat-form button'); button.disabled = true;
     const thinking = make('div','Thinking about your deck…','message'); $('#messages').append(thinking);
-    try { const r = await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:prompt,history:conversation.slice(-20),context:deck ? {deck,analysis:analysisText(),current_hand:playStarted ? [...hand] : null,game:typeof gameContext==='function'?gameContext():null,verified_cards:deck.cards.filter(c=>metadata[c.name] || cardCache.has(c.name)).map(c=>{const m=metadata[c.name] || cardCache.get(c.name); return {name:m.name,type_line:m.type_line,mana_value:m.cmc,color_identity:m.color_identity};})} : {}})}); const data = await r.json(); if(deck!==currentDeck || chatEpoch!==currentEpoch) return; message(data.answer || data.error); if(!r.ok) $('.notice').textContent=data.error; if(r.ok && data.answer) {conversation.push({role:'user',content:prompt},{'role':'assistant','content':data.answer.slice(0,8000)}); conversation=conversation.slice(-20);storeConversation();} }
+    try { const r = await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:prompt,history:conversation.slice(-10),context:deck ? {deck:{name:deck.name,commander:deck.commander,cards:deck.cards,sourceUrl:deck.sourceUrl},analysis:analysisText(),current_hand:playStarted ? [...hand] : null,game:typeof gameContext==='function'?gameContext():null,verified_cards:deck.cards.filter(c=>metadata[c.name] || cardCache.has(c.name)).map(c=>{const m=metadata[c.name] || cardCache.get(c.name); return {name:m.name,type_line:m.type_line,mana_value:m.cmc,color_identity:m.color_identity};})} : {}})}); const data = await r.json(); if(deck!==currentDeck || chatEpoch!==currentEpoch) return; message(data.answer || data.error); if(!r.ok) $('.notice').textContent=data.error; if(r.ok && data.answer) {conversation.push({role:'user',content:prompt},{'role':'assistant','content':data.answer.slice(0,8000)}); conversation=conversation.slice(-20);storeConversation();if(data.mode==='computed')$('.notice').textContent='Computed from Scryfall card data. AI chat may still require a working OpenAI connection.';} }
     catch { message('The server could not be reached. Try again.'); }
     finally { thinking.remove(); button.disabled = false; chatBusy=false; $('#discuss-hand').disabled=!playStarted || bottomNeeded>0; }
   }

@@ -9,7 +9,7 @@ function resetBoard(){zones={battlefield:[],graveyard:[],exile:[],command:deck?.
 function selectedCard(){if(!selected)return null;return selected.zone==='hand' ? (hand[selected.index] ? {name:hand[selected.index]}:null) : zones[selected.zone]?.[selected.index];}
 function selectGameCard(zone,index){selected={zone,index};renderBoard();}
 function moveSelected(destination){
- const card=selectedCard();if(!card||bottomNeeded)return;
+ const card=selectedCard();if(!card||bottomNeeded||destination===selected.zone)return;
  if(destination==='command' && card.name.toLowerCase()!==deck.commander.toLowerCase())return;
  checkpoint();
  const source=selected.zone;
@@ -30,7 +30,7 @@ function renderBoard(){
   $(target).replaceChildren();
   if(!zones[zone].length)$(target).append(make('p',zone==='battlefield'?'Your next play goes here.':'Empty','zone-empty'));
   zones[zone].forEach((item,index)=>{
-   const button=make('button','','table-card'+(item.tapped?' tapped':'')+(selected?.zone===zone&&selected.index===index?' chosen':''));button.setAttribute('aria-label',item.name);button.onclick=()=>selectGameCard(zone,index);
+   const button=make('button','','table-card'+(item.tapped?' tapped':'')+(selected?.zone===zone&&selected.index===index?' chosen':''));button.setAttribute('aria-label',item.name);button.onclick=()=>selectGameCard(zone,index);wireGameCard(button,zone,index);
    if(!item.token){const image=make('img','');image.alt=item.name;image.onload=()=>{image.hidden=false;};image.onerror=()=>{image.hidden=true;$('#image-status').textContent='Some images are unavailable. Retry images to try again.';};image.hidden=true;image.src='/api/card-image?name='+encodeURIComponent(item.name);button.append(image);}
    button.append(make('span',item.name+(item.counters ? ` · +${item.counters}`:''),'card-name'));$(target).append(button);
   });
@@ -55,6 +55,32 @@ $('#undo-game').onclick=()=>{if(!undoStack.length)return;const saved=JSON.parse(
 $('#retry-images').onclick=()=>{$('#image-status').textContent='Retrying card images…';cardCache.clear();renderHand();document.querySelectorAll('#hand img,.table-card img').forEach(image=>{image.src=image.src+'&retry='+Date.now();});};
 $('#shuffle').onclick=()=>{if((zones.battlefield.length||zones.graveyard.length||zones.exile.length)&&!confirm('Start a new game? This clears the current table.'))return;newHand();};
 $('#mulligan').onclick=()=>{if(zones.battlefield.length||zones.graveyard.length||zones.exile.length){$('#play-status').textContent='Start a new game to mulligan after playing cards.';return;}newHand(true);};
+let hovered=null, dragOrigin=null;
+function wireGameCard(button,zone,index){
+ button.draggable=true;
+ button.onmouseenter=()=>{hovered={zone,index};};button.onmouseleave=()=>{hovered=null;};
+ button.onfocus=()=>{hovered={zone,index};};button.onblur=()=>{hovered=null;};
+ let touchStart=null, touchDragging=false, suppressClickUntil=0;
+ button.addEventListener?.('click',event=>{if(Date.now()<suppressClickUntil){event.preventDefault();event.stopImmediatePropagation();}},true);
+ button.onpointerdown=event=>{if(event.pointerType==='mouse'||bottomNeeded)return;touchStart={x:event.clientX,y:event.clientY};touchDragging=false;button.setPointerCapture(event.pointerId);};
+ button.onpointermove=event=>{if(!touchStart)return;if(Math.hypot(event.clientX-touchStart.x,event.clientY-touchStart.y)>10){touchDragging=true;button.classList.add('dragging');document.querySelectorAll('[data-drop]').forEach(target=>target.classList.toggle('drop-ready',target.contains(document.elementFromPoint(event.clientX,event.clientY))));}};
+ button.onpointerup=event=>{if(!touchStart)return;if(touchDragging){suppressClickUntil=Date.now()+500;const target=document.elementFromPoint(event.clientX,event.clientY)?.closest('[data-drop]');if(target){selected={zone,index};moveSelected(target.dataset.drop);}event.preventDefault();}touchStart=null;touchDragging=false;button.classList.remove('dragging');document.querySelectorAll('[data-drop]').forEach(target=>target.classList.remove('drop-ready'));};
+ button.onpointercancel=()=>{touchStart=null;touchDragging=false;button.classList.remove('dragging');document.querySelectorAll('[data-drop]').forEach(target=>target.classList.remove('drop-ready'));};
+ button.ondragstart=event=>{if(bottomNeeded){event.preventDefault();return;}dragOrigin={zone,index};event.dataTransfer.setData('application/x-mtg-card',JSON.stringify(dragOrigin));event.dataTransfer.effectAllowed='move';button.classList.add('dragging');};
+ button.ondragend=()=>{dragOrigin=null;button.classList.remove('dragging');document.querySelectorAll('[data-drop]').forEach(e=>e.classList.remove('drop-ready'));};
+}
+document.querySelectorAll('[data-drop]').forEach(target=>{
+ target.ondragover=event=>{if(dragOrigin&&!bottomNeeded){event.preventDefault();event.dataTransfer.dropEffect='move';target.classList.add('drop-ready');}};
+ target.ondragleave=event=>{if(!target.contains(event.relatedTarget))target.classList.remove('drop-ready');};
+ target.ondrop=event=>{event.preventDefault();target.classList.remove('drop-ready');if(!dragOrigin||bottomNeeded)return;selected=dragOrigin;const destination=target.dataset.drop==='top'&&event.shiftKey?'bottom':target.dataset.drop;moveSelected(destination);dragOrigin=null;};
+});
+document.addEventListener?.('keydown',event=>{
+ if(window.location.pathname.replace(/\/$/,'')!=='/playtest'||event.ctrlKey||event.metaKey||event.altKey||event.target.closest?.('input,textarea,select,[contenteditable=true]')||$('#card-dialog').open)return;
+ const key=event.key.toLowerCase();const shortcuts={p:'battlefield',h:'hand',g:'graveyard',x:'exile',l:'top',b:'bottom',c:'command'};
+ if(hovered && selectedCardForHover(hovered)){selected={...hovered};if(shortcuts[key]){event.preventDefault();moveSelected(shortcuts[key]);hovered=null;return;}if(key==='t'){event.preventDefault();$('#tap-card').onclick();}if(key==='v'){event.preventDefault();showCard(selectedCard().name);}if(key==='+'||key==='='){event.preventDefault();$('#counter-plus').onclick();}if(key==='-'){event.preventDefault();$('#counter-minus').onclick();}}
+ if(key==='d'){event.preventDefault();drawGameCard();}if(key==='n'){event.preventDefault();$('#next-turn').onclick();}if(key==='u'){event.preventDefault();$('#undo-game').onclick();}
+});
+function selectedCardForHover(value){return value.zone==='hand'?hand[value.index]:zones[value.zone]?.[value.index];}
 // Restore the same table when moving between Libby and /playtest in this tab.
 try{
  const saved=JSON.parse(sessionStorage.getItem('mtgvibes-game')||'null');
@@ -62,6 +88,6 @@ try{
  else zones.command=deck?.commander?[gameCard(deck.commander)]:[];
 }catch{zones.command=deck?.commander?[gameCard(deck.commander)]:[];}
 renderHand();
-if(window.location.pathname.startsWith('/playtest')){tab('play');if(deck&&!playStarted)newHand();}
-else{tab(new URLSearchParams(window.location.search).get('view')==='deck'?'deck':'chat');if(sessionStorage.getItem('libby-game-question')){sessionStorage.removeItem('libby-game-question');send('Libby, help me understand this hand and board. What is my best plan from here?');}}
+const routePage={'/upload':'deck','/analyze':'analyze','/playtest':'play'}[window.location.pathname.replace(/\/$/,'')] || 'chat';tab(routePage);if(routePage==='play'&&deck&&!playStarted)newHand();
+if(routePage==='chat'&&sessionStorage.getItem('libby-game-question')){sessionStorage.removeItem('libby-game-question');send('Libby, help me understand this hand and board. What is my best plan from here?');}
 window.addEventListener('beforeunload',persistGame);

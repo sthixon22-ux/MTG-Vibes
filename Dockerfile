@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 WORKDIR /app
-COPY server.py ./server.py
+COPY server.py analytics.py ./
 COPY static ./static
 RUN useradd --create-home --uid 10001 mtgvibes && chown -R mtgvibes:mtgvibes /app
 USER mtgvibes

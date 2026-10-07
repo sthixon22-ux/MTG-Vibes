@@ -129,6 +129,28 @@ class ServerTests(unittest.TestCase):
                 self.assertEqual(json.loads(response.read())['code'], expected)
                 connection.close()
 
+    def test_unclassified_429_is_not_called_temporary(self):
+        import http.client
+        error = urllib.error.HTTPError('https://api.openai.com/v1/responses', 429, 'Limited', {}, io.BytesIO(b'{}'))
+        with patch.dict(os.environ, {'MTG_OPENAI_API_KEY': 'test-only'}), patch('server.urllib.request.urlopen', side_effect=error):
+            connection = http.client.HTTPConnection('127.0.0.1', self.http.server_port)
+            connection.request('POST', '/api/chat', json.dumps({'message': 'Help'}), {'Content-Type': 'application/json'})
+            response = connection.getresponse()
+            data = json.loads(response.read())
+            self.assertEqual(data['code'], 'provider_429')
+            self.assertNotIn('temporarily limiting', data['error'])
+            connection.close()
+
+    def test_odds_work_without_openai_credentials(self):
+        cards = [{'name': 'Commander', 'quantity': 1}, {'name': 'Land', 'quantity': 3}, {'name': 'Cheap', 'quantity': 2}, {'name': 'Other', 'quantity': 3}]
+        lookup = lambda name: {'name': name, 'type_line': 'Basic Land' if name == 'Land' else 'Creature', 'cmc': 2 if name == 'Cheap' else 5}
+        with patch.dict(os.environ, {'MTG_OPENAI_API_KEY': ''}), patch('server.prime_cards'), patch('server.lookup_card', side_effect=lookup):
+            status, body = self.request('/api/chat', {'message': 'What are my opening-hand odds?', 'context': {'deck': {'cards': cards, 'commander': 'Commander'}}})
+            self.assertEqual(status, 200)
+            result = json.loads(body)
+            self.assertEqual(result['mode'], 'computed')
+            self.assertIn('62.5%', result['answer'])
+
     def test_images_are_cached_and_only_use_scryfall(self):
         import http.client
         server.CACHE['forest'] = {'image_uris': {'normal': 'https://cards.scryfall.io/test.jpg'}}

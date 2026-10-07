@@ -27,6 +27,7 @@ vm.runInContext(String.raw`
 assert.throws(()=>vm.runInContext("parseList('Not a deck line')",context));
 assert.throws(()=>vm.runInContext("parseList('0 Forest')",context));
 console.log('Deck import, commander exclusion, mulligans, bottoming, and draws passed.');
+context.document.body={dataset:{}};
 context.window={location:{pathname:'/',search:''},addEventListener(){}};
 context.URLSearchParams=URLSearchParams;
 context.sessionStorage={getItem(){return null},setItem(){},removeItem(){}};
