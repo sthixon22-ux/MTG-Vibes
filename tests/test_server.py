@@ -3,6 +3,8 @@ import base64
 import json
 import os
 import threading
+import tempfile
+from pathlib import Path
 import unittest
 import urllib.request
 import urllib.error
@@ -114,6 +116,39 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(payload['input'][2]['role'], 'assistant')
             self.assertEqual(payload['input'][-1]['content'], 'Help with mana')
             connection.close()
+
+    def test_provider_429_distinguishes_quota_and_rate_limit(self):
+        import http.client
+        for code, expected in [('insufficient_quota', 'insufficient_quota'), ('rate_limit_exceeded', 'provider_rate_limit')]:
+            error = urllib.error.HTTPError('https://api.openai.com/v1/responses', 429, 'Limited', {}, io.BytesIO(json.dumps({'error': {'code': code}}).encode()))
+            with patch.dict(os.environ, {'MTG_OPENAI_API_KEY': 'test-only'}), patch('server.urllib.request.urlopen', side_effect=error):
+                connection = http.client.HTTPConnection('127.0.0.1', self.http.server_port)
+                connection.request('POST', '/api/chat', json.dumps({'message': 'Help'}), {'Content-Type': 'application/json'})
+                response = connection.getresponse()
+                self.assertEqual(response.status, 429)
+                self.assertEqual(json.loads(response.read())['code'], expected)
+                connection.close()
+
+    def test_images_are_cached_and_only_use_scryfall(self):
+        import http.client
+        server.CACHE['forest'] = {'image_uris': {'normal': 'https://cards.scryfall.io/test.jpg'}}
+        with tempfile.TemporaryDirectory() as folder, patch('server.IMAGE_CACHE', Path(folder)), patch('server.urllib.request.urlopen', return_value=io.BytesIO(b'\xff\xd8test-image')) as upstream:
+            connection = http.client.HTTPConnection('127.0.0.1', self.http.server_port)
+            for _ in range(2):
+                connection.request('GET', '/api/card-image?name=Forest')
+                response = connection.getresponse()
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response.getheader('Content-Type'), 'image/jpeg')
+                self.assertEqual(response.read(), b'\xff\xd8test-image')
+            self.assertEqual(upstream.call_count, 1)
+            server.CACHE['forest'] = {'image_uris': {'normal': 'https://other.example/test.jpg'}}
+            connection.request('GET', '/api/card-image?name=Forest')
+            response = connection.getresponse()
+            self.assertEqual(response.status, 404)
+            response.read()
+            self.assertEqual(upstream.call_count, 1)
+            connection.close()
+        server.CACHE.clear()
 
 
 if __name__ == '__main__':

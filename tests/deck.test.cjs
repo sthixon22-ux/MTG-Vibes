@@ -27,3 +27,31 @@ vm.runInContext(String.raw`
 assert.throws(()=>vm.runInContext("parseList('Not a deck line')",context));
 assert.throws(()=>vm.runInContext("parseList('0 Forest')",context));
 console.log('Deck import, commander exclusion, mulligans, bottoming, and draws passed.');
+context.window={location:{pathname:'/',search:''},addEventListener(){}};
+context.URLSearchParams=URLSearchParams;
+context.sessionStorage={getItem(){return null},setItem(){},removeItem(){}};
+context.prompt=()=> 'Test token';
+// Complete the small DOM stub for the new table's accessibility attributes.
+for(const el of elements.values()) el.setAttribute=()=>{};
+const originalCreate=context.document.createElement;
+context.document.createElement=()=>({...originalCreate(),setAttribute(){}});
+vm.runInContext(fs.readFileSync('static/table.js','utf8'),context);
+vm.runInContext(`
+  const totalCards=()=>library.length+hand.length+Object.values(zones).reduce((n,cards)=>n+cards.filter(c=>!c.token).length,0);
+  const before=totalCards();
+  selectGameCard('hand',0);moveSelected('battlefield');
+  if(hand.length!==6||zones.battlefield.length!==1||totalCards()!==before)throw new Error('Play duplicated or lost a card');
+  selectGameCard('battlefield',0);document.querySelector('#tap-card').onclick();
+  if(!zones.battlefield[0].tapped)throw new Error('Tap failed');
+  document.querySelector('#counter-plus').onclick();
+  if(zones.battlefield[0].counters!==1)throw new Error('Counter failed');
+  moveSelected('graveyard');
+  if(zones.graveyard.length!==1||zones.battlefield.length!==0||totalCards()!==before)throw new Error('Graveyard move failed');
+  document.querySelector('#undo-game').onclick();
+  if(zones.battlefield.length!==1||zones.graveyard.length!==0)throw new Error('Undo failed');
+  document.querySelector('#next-turn').onclick();
+  if(turn!==2||zones.battlefield[0].tapped||hand.length!==7||totalCards()!==before)throw new Error('Turn advance failed');
+  selectGameCard('command',0);moveSelected('battlefield');
+  if(zones.command.length!==0||zones.battlefield.length!==2||totalCards()!==before)throw new Error('Commander move failed');
+`,context);
+console.log('Goldfish zones, card conservation, tap, counters, undo, turn advance, and commander checks passed.');

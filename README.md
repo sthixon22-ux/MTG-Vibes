@@ -34,11 +34,11 @@ Basic analysis checks the total count, commander presence, and potential duplica
 
 Opening hands exclude one copy of the selected commander. The first multiplayer mulligan is free; later mulligans require selecting cards to bottom. Draws consume cards without replacement. This is a manual tester, not a complete rules engine.
 
-Chat commands: `import my deck`, `analyze my deck`, `test an opening hand`, and `find Sol Ring`. Other messages go to OpenAI when configured. The model receives the active deck, analysis, fetched card metadata, current opening hand, and the last ten conversation exchanges. Follow-up questions retain context until you switch decks, start a new conversation, or reload the page. Chat history stays in memory in this browser tab; it is sent to OpenAI with each follow-up. It has no live browsing or account access and cannot alter the deck.
+Chat commands: `import my deck`, `analyze my deck`, `test an opening hand`, and `find Sol Ring`. Other messages go to OpenAI when configured. Libby receives the active deck, analysis, fetched card metadata, current hand and board, and the last ten conversation exchanges. Follow-up questions retain context until you start a new conversation or end the browser tab session. Chat history is saved per deck in session storage in this browser tab; it is sent to OpenAI with each follow-up. It has no live browsing or account access and cannot alter the deck.
 
 ## Optional AI configuration
 
-Configure `MTG_OPENAI_API_KEY` securely in the environment; never commit it. `MTG_OPENAI_MODEL` optionally overrides `gpt-4.1-mini`. The server uses the OpenAI Responses API with `store: false`. No model requests are made until a free-form message is submitted. This setting does not establish a zero-retention agreement with the provider.
+Configure `MTG_OPENAI_API_KEY` securely in the environment; never commit it. `MTG_OPENAI_MODEL` optionally overrides `gpt-4.1-mini`. The server uses the OpenAI Responses API with `store: false`. Model requests occur when you send a message or select an AI analysis action. This setting does not establish a zero-retention agreement with the provider.
 
 Required network hosts: `api.scryfall.com`, `api.openai.com`. Manual source links go to Moxfield, Scryfall, and EDHREC. No automated Moxfield or EDHREC integration is implemented; supported access and terms must be verified before adding one. Never collect Moxfield passwords.
 
@@ -50,6 +50,16 @@ Run `python -m unittest discover -s tests -v` and `node tests/deck.test.cjs` (No
 
 Playtesting automatically fetches Scryfall images for cards in hand. Click a card to enlarge it (including both faces where available); when bottoming after a mulligan, clicking selects the card to bottom instead. Failed image loads leave the card name usable. **Ask AI about this hand** supplies the real hand for discussion.
 
-Each deck has an optional **Moxfield deck URL** field. Save the deck after entering its source URL; both Moxfield links then follow the active deck. Old saved lists without a source URL link to your profile until you add one. Adding a URL does not automatically import or synchronize that deck.
+Each deck has an optional **Moxfield deck URL** field. Save the deck after entering its source URL; both Moxfield links then follow the active deck. Old saved lists without a source URL link to the Moxfield homepage until you add one. Adding a URL does not automatically import or synchronize that deck.
 
 After a GitHub update, use Render → mtg-vibes → **Manual Deploy → Deploy latest commit** and wait for **Live**. Automatic deploy is disabled in the Blueprint.
+
+## Libby and the goldfish table
+
+Click the animated cube on the homepage to start talking to Libby. Choose a saved deck in the sidebar to supply its full list. Libby receives that list, local analysis, and the current hand and board when present; it cannot directly read your Moxfield account. External Moxfield navigation goes to its homepage for sign-in.
+
+The separate `/playtest` page provides library, hand, battlefield, command zone, graveyard, and exile. Select a card, then use the move buttons; battlefield cards can tap and carry counters. Life, tokens, turn advance, top-card viewing, milling, library shuffling, and up to 50 undo snapshots are available. Multiplayer mulligans start with one free mulligan. New game clears the table. Game state survives navigation within the same browser tab; switching active decks resets the table. This is a manual goldfishing tool, not a rules engine.
+
+Images now use the authenticated `/api/card-image` route. The server retrieves approved Scryfall JPEGs and caches them in the ignored `.card-images/` directory; the browser loads them from the app origin. Retry images is available when downloads fail. Render may clear this cache during redeployments.
+
+OpenAI 429 errors are categorized: insufficient quota requires checking API credits, billing, and project limits; temporary provider rate limits advise waiting. Site rate limits are separate. These messages do not repair missing API quota, and ChatGPT subscriptions do not supply API credits.

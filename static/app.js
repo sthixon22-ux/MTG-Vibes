@@ -12,18 +12,32 @@ function moxfieldUrl(value) {
 function updateSourceLinks() {
   let url = ''; try { url = moxfieldUrl(deck?.sourceUrl); } catch {}
   for (const id of ['#deck-source-link','#active-source-link']) {
-    $(id).href = url || 'https://moxfield.com/users/Stwizz';
-    $(id).textContent = url ? 'Open this deck on Moxfield ↗' : 'Open your Moxfield profile ↗';
+    $(id).href = url || 'https://moxfield.com';
+    $(id).textContent = url ? 'Open this deck on Moxfield ↗' : 'Open Moxfield · sign in ↗';
   }
 }
-function resetConversation() {
+function resetConversation(clear=true) {
   conversation = []; chatEpoch++;
+  if(clear && typeof sessionStorage!=='undefined') try {sessionStorage.removeItem('libby-chat-'+(deck?.id || 'general'));}catch{}
   $('#messages').replaceChildren(make('div',deck ? `Let’s talk about ${deck.name}. Ask about strategy, card swaps, or your next opening hand.` : 'Add a deck, then ask me about its strategy, card choices, or opening hands.','message'));
   $('#chat-context').textContent = deck ? `Talking about ${deck.name}` : 'Add a deck to give AI your list';
 }
-$('#clear-chat').onclick = resetConversation;
+function restoreConversation() {
+  resetConversation(false);
+  if(typeof sessionStorage==='undefined')return;
+  try {const saved=JSON.parse(sessionStorage.getItem('libby-chat-'+(deck?.id || 'general')) || '[]'); if(Array.isArray(saved)) conversation=saved.filter(t=>['user','assistant'].includes(t?.role)&&typeof t.content==='string'&&t.content.length<=8000).slice(-20); conversation.forEach(t=>message(t.content,t.role==='user'));}catch{}
+}
+function storeConversation(){if(typeof sessionStorage!=='undefined')try{sessionStorage.setItem('libby-chat-'+(deck?.id || 'general'),JSON.stringify(conversation));}catch{}}
+$('#clear-chat').onclick = () => resetConversation();
 const make = (tag, text, cls) => { const el = document.createElement(tag); el.textContent = text; if (cls) el.className = cls; return el; };
-function tab(id) { document.querySelectorAll('.tab').forEach(e => e.hidden = e.id !== id); document.querySelectorAll('[data-tab]').forEach(e => { e.classList.toggle('selected', e.dataset.tab === id); e.setAttribute?.('aria-current', e.dataset.tab === id ? 'page' : 'false'); }); }
+function tab(id) {
+  if(typeof window!=='undefined') {
+    const tablePage=window.location.pathname.startsWith('/playtest');
+    if(id==='play' && !tablePage) { window.location.href='/playtest'; return; }
+    if(id!=='play' && tablePage) { window.location.href='/?view='+id; return; }
+  }
+  document.querySelectorAll('.tab').forEach(e => e.hidden = e.id !== id); document.querySelectorAll('[data-tab]').forEach(e => { e.classList.toggle('selected', e.dataset.tab === id); e.setAttribute?.('aria-current', e.dataset.tab === id ? 'page' : 'false'); });
+}
 document.querySelectorAll('[data-tab]').forEach(e => e.onclick = () => tab(e.dataset.tab));
 function parseList(text) {
   const cards = new Map(); let excluded = false;
@@ -76,6 +90,9 @@ function saveLibrary() {
   } catch { message('Browser storage is unavailable. Download your list to keep a backup.'); return false; }
 }
 function renderLibrary() {
+  $('#sidebar-decks').replaceChildren();
+  if(!savedDecks.length) $('#sidebar-decks').append(make('p','Your decks will appear here.','muted'));
+  savedDecks.forEach(saved=>{ const button=make('button',saved.name,saved.id===editingId?'selected':''); button.onclick=()=>{if(saved.id!==editingId){activateDeck(saved);saveLibrary();}}; $('#sidebar-decks').append(button); });
   const select = $('#saved-decks'); select.replaceChildren();
   if (!savedDecks.length) select.append(make('option','No saved decks yet'));
   for (const saved of savedDecks) { const option = make('option',saved.name); option.value = saved.id; select.append(option); }
@@ -93,12 +110,15 @@ function activateDeck(value) {
   $('#import-error').textContent = '';
   if (value) renderDeck();
   else { $('#workspace-name').textContent='Add your first deck'; $('#active-name').textContent='Your next great deck'; $('#active-count').textContent='No active list'; $('#analysis').replaceChildren(); }
-  updateSourceLinks(); resetConversation(); renderLibrary(); renderHand();
+  updateSourceLinks(); restoreConversation(); renderLibrary(); renderHand();
+  if(typeof resetBoard==='function') resetBoard();
 }
 $('#manage-decks').onclick = () => tab('deck');
 $('#quick-add').onclick = () => { activateDeck(null); tab('deck'); $('#deck-name').focus(); };
 $('#play-import').onclick = () => tab('deck');
-$('#quick-analyze').onclick = () => { tab('deck'); if(deck) renderDeck(); };
+$('#quick-analyze').onclick = () => { tab('chat'); send('Libby, analyze my active deck. Explain its game plan, strengths, weaknesses, and possible improvements.'); };
+$('#libby').onclick = () => { $('#prompt').focus(); $('#chat-form').scrollIntoView({behavior:'smooth',block:'center'}); };
+$('#sidebar-add').onclick=()=>{activateDeck(null);tab('deck');};
 $('#quick-play').onclick = () => { tab('play'); if(deck && !playStarted) newHand(); };
 $('#new-deck').onclick = () => { activateDeck(null); tab('deck'); $('#deck-name').focus(); };
 $('#saved-decks').onchange = e => { const value = savedDecks.find(d=>d.id===e.target.value); if(value) { activateDeck(value); saveLibrary(); } };
@@ -153,6 +173,7 @@ function newHand(isMulligan = false) {
   mulligans = isMulligan ? mulligans + 1 : 0;
   library = shuffle(libraryCards()); hand = library.splice(0,7); playStarted = true;
   bottomNeeded = Math.min(Math.max(0,mulligans-1),hand.length); renderHand();
+  if(typeof resetBoard==='function') resetBoard();
 }
 function renderHand() {
   $('#play-empty').hidden = !!deck;
@@ -162,11 +183,8 @@ function renderHand() {
     card.setAttribute?.('aria-label',bottomNeeded ? `Put ${name} on the bottom` : `View ${name}`);
     const img = make('img',''); img.alt = name; img.loading = 'eager'; img.hidden = true;
     card.append(img); card.append(make('span',name,'card-name'));
-    getCard(name).then(data => {
-      const url = imageUrl(data);
-      if(url) { img.onload=()=>{ img.hidden=false; }; img.onerror=()=>{img.hidden=true;}; img.src=url; }
-    }).catch(()=>{ $('#image-status').textContent='Some images are unavailable. Card names remain usable; start a new hand to retry.'; });
-    card.onclick = () => { if(bottomNeeded) { library.push(hand.splice(index,1)[0]); bottomNeeded--; renderHand(); } else showCard(name); };
+    img.onload=()=>{img.hidden=false;}; img.onerror=()=>{img.hidden=true; $('#image-status').textContent='An image could not load. Click Retry images to try again.';}; img.src='/api/card-image?name='+encodeURIComponent(name);
+    card.onclick = () => { if(bottomNeeded) { if(typeof checkpoint==='function')checkpoint(); library.push(hand.splice(index,1)[0]); bottomNeeded--; renderHand(); } else if(typeof selectGameCard==='function') selectGameCard('hand',index); else showCard(name); };
     $('#hand').append(card);
   });
   if (!playStarted) $('#play-status').textContent = 'Import a deck, then shuffle to start testing.';
@@ -174,6 +192,7 @@ function renderHand() {
   $('#draw').disabled = !playStarted || bottomNeeded > 0 || !library.length;
   $('#mulligan').disabled = !playStarted || mulligans >= 8;
   $('#discuss-hand').disabled = !playStarted || bottomNeeded > 0 || chatBusy;
+  if(typeof renderBoard==='function') renderBoard();
 }
 function imageUrl(data,face=0) {
   const value = data?.image_uris?.normal || data?.card_faces?.[face]?.image_uris?.normal;
@@ -192,12 +211,12 @@ async function showCard(name) {
   try {
     const data=await getCard(name); if(!$('#card-dialog').open || detail.firstChild.textContent!==name) return;
     const faces=data.image_uris ? [data] : data.card_faces || [data];
-    faces.forEach((face,i)=> { const url=imageUrl(data,i); if(url) { const img=make('img',''); img.src=url; img.alt=face.name || name; detail.append(img); } });
+    faces.forEach((face,i)=> { const url=imageUrl(data,i); if(url) { const img=make('img',''); img.src='/api/card-image?name='+encodeURIComponent(name)+'&face='+i; img.alt=face.name || name; detail.append(img); } });
     detail.append(make('p',data.oracle_text || data.card_faces?.map(c=>c.oracle_text).join('\n') || ''));
   } catch { detail.append(make('p','Card images could not be loaded. Try again later.')); }
 }
 $('#close-card').onclick=()=>$('#card-dialog').close();
-$('#discuss-hand').onclick=()=>{tab('chat');send('Should I keep this opening hand? Explain its plan, risks, and what I should draw next.');};
+$('#discuss-hand').onclick=()=>{ if(typeof sessionStorage!=='undefined')sessionStorage.setItem('libby-game-question','true'); tab('chat'); };
 $('#shuffle').onclick = () => newHand(); $('#mulligan').onclick = () => newHand(true);
 $('#draw').onclick = () => { if (!bottomNeeded && library.length) { hand.push(library.shift()); renderHand(); } };
 function message(text,user=false) { $('#messages').append(make('div',text,'message'+(user?' user':''))); $('#messages').scrollTop = $('#messages').scrollHeight; }
@@ -213,7 +232,7 @@ async function send(prompt) {
     chatBusy = true; const currentDeck=deck, currentEpoch=chatEpoch;
     const button = $('#chat-form button'); button.disabled = true;
     const thinking = make('div','Thinking about your deck…','message'); $('#messages').append(thinking);
-    try { const r = await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:prompt,history:conversation.slice(-20),context:deck ? {deck,analysis:analysisText(),current_hand:playStarted ? [...hand] : null,verified_cards:deck.cards.filter(c=>metadata[c.name] || cardCache.has(c.name)).map(c=>{const m=metadata[c.name] || cardCache.get(c.name); return {name:m.name,type_line:m.type_line,mana_value:m.cmc,color_identity:m.color_identity};})} : {}})}); const data = await r.json(); if(deck!==currentDeck || chatEpoch!==currentEpoch) return; message(data.answer || data.error); if(r.ok && data.answer) {conversation.push({role:'user',content:prompt},{role:'assistant',content:data.answer.slice(0,8000)}); conversation=conversation.slice(-20);} }
+    try { const r = await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:prompt,history:conversation.slice(-20),context:deck ? {deck,analysis:analysisText(),current_hand:playStarted ? [...hand] : null,game:typeof gameContext==='function'?gameContext():null,verified_cards:deck.cards.filter(c=>metadata[c.name] || cardCache.has(c.name)).map(c=>{const m=metadata[c.name] || cardCache.get(c.name); return {name:m.name,type_line:m.type_line,mana_value:m.cmc,color_identity:m.color_identity};})} : {}})}); const data = await r.json(); if(deck!==currentDeck || chatEpoch!==currentEpoch) return; message(data.answer || data.error); if(!r.ok) $('.notice').textContent=data.error; if(r.ok && data.answer) {conversation.push({role:'user',content:prompt},{'role':'assistant','content':data.answer.slice(0,8000)}); conversation=conversation.slice(-20);storeConversation();} }
     catch { message('The server could not be reached. Try again.'); }
     finally { thinking.remove(); button.disabled = false; chatBusy=false; $('#discuss-hand').disabled=!playStarted || bottomNeeded>0; }
   }
@@ -232,7 +251,7 @@ try {
     activateDeck(savedDecks.find(d=>d.id===saved.id)||savedDecks[0]);
   }
 } catch { /* Ignore invalid or unavailable browser storage. */ }
-fetch('/api/health').then(r=>r.json()).then(data=> { $('.notice').textContent=data.ai_configured ? 'AI is configured. Ask a question below, or use the quick action buttons.' : 'AI isn’t connected yet. Deck import, analysis, and playtesting are available.'; }).catch(()=>{ $('.notice').textContent='Connection unavailable. Refresh to reconnect.'; });
+fetch('/api/health').then(r=>r.json()).then(data=> { $('.notice').textContent=data.ai_configured ? 'Libby’s key is configured. Click the cube or ask a question below.' : 'Libby isn’t connected yet. Deck import, analysis, and playtesting are available.'; }).catch(()=>{ $('.notice').textContent='Connection unavailable. Refresh to reconnect.'; });
 renderLibrary();
 updateSourceLinks();
 renderHand();
