@@ -102,7 +102,7 @@ class ServerTests(unittest.TestCase):
 
     def test_openai_context_and_answer(self):
         import http.client
-        output = {'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': 'Review your mana sources.'}]}]}
+        output = {'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': json.dumps({'answer': 'Review your mana sources.', 'recommendations': []})}]}]}
         with patch.dict(os.environ, {'MTG_OPENAI_API_KEY': 'test-only'}), patch('server.urllib.request.urlopen', return_value=io.BytesIO(json.dumps(output).encode())) as upstream:
             connection = http.client.HTTPConnection('127.0.0.1', self.http.server_port)
             connection.request('POST', '/api/chat', json.dumps({'message': 'Help with mana', 'context': {'deck': 'example'}, 'history': [{'role':'user','content':'What about ramp?'},{'role':'assistant','content':'Consider early mana rocks.'}]}), {'Content-Type': 'application/json'})
@@ -171,6 +171,26 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(upstream.call_count, 1)
             connection.close()
         server.CACHE.clear()
+
+    def test_candidate_search_checks_results_even_if_query_escapes_filter(self):
+        good = {'name': 'Green', 'color_identity': ['G'], 'legalities': {'commander': 'legal'}}
+        blue = {'name': 'Blue', 'color_identity': ['U'], 'legalities': {'commander': 'legal'}}
+        banned = {'name': 'Banned', 'color_identity': [], 'legalities': {'commander': 'banned'}}
+        with patch('server.urllib.request.urlopen', return_value=io.BytesIO(json.dumps({'data': [blue, banned, good]}).encode())):
+            result = server.search_cards('t:instant) or id:u (', {'color_identity': ['G'], 'identity_verified': True})
+        self.assertEqual([c['name'] for c in result], ['Green'])
+        server.CACHE.clear()
+
+    def test_analysis_endpoint_checks_identity_without_ai(self):
+        leader = {'name': 'Leader', 'type_line': 'Legendary Creature', 'color_identity': ['G'], 'legalities': {'commander': 'legal'}, 'cmc': 3}
+        island = {'name': 'Island', 'type_line': 'Basic Land — Island', 'color_identity': ['U'], 'legalities': {'commander': 'legal'}, 'cmc': 0}
+        deck = {'commander': 'Leader', 'cards': [{'name': 'Leader', 'quantity': 1}, {'name': 'Island', 'quantity': 99}]}
+        with patch.dict(os.environ, {'MTG_OPENAI_API_KEY': ''}), patch('server.prime_cards'), patch('server.lookup_card', side_effect=lambda n: leader if n == 'Leader' else island):
+            status, body = self.request('/api/deck-analysis', {'deck': deck})
+        self.assertEqual(status, 200)
+        check = json.loads(body)['commander_check']
+        self.assertEqual(check['color_identity'], ['G'])
+        self.assertIn('outside', ' '.join(check['issues']))
 
 
 if __name__ == '__main__':

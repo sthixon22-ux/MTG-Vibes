@@ -1,5 +1,20 @@
 // Focused deck hubs, artwork customization, and deterministic deck statistics.
 let coverDraft=deck?.coverData || '', deckView='images', statsPending=false;
+function renderCommanderCheck(){
+ const check=deck?.commanderCheck || deck?.statistics?.commander_check;
+ const colorNames={W:'White',U:'Blue',B:'Black',R:'Red',G:'Green'};
+ for(const selector of ['#commander-check','#libby-deck-check']){
+  const target=$(selector);target.replaceChildren();
+  target.classList.remove('has-issues');
+  if(!deck){target.append(make('span','Choose a deck to check its Commander identity.'));continue;}
+  if(!check){target.append(make('span','Commander identity not checked yet. Libby checks card data when you chat.'));
+   const button=make('button','Check deck');button.onclick=refreshStatistics;target.append(button);continue;}
+  const colors=check.identity_verified?(check.color_identity.map(c=>colorNames[c]).join(' · ') || 'Colorless'):'Identity unverified';
+  target.append(make('strong',colors),make('span',check.status==='passed'?'Construction checks passed':`${check.issues.length} item${check.issues.length===1?'':'s'} to review`));
+  target.classList.toggle('has-issues',check.status!=='passed');
+  if(check.issues.length){const detail=make('details','','check-details');detail.append(make('summary','Details'));const list=make('div','','check-issues');check.issues.forEach(issue=>list.append(make('p',issue)));list.append(make('p',check.scope || 'Construction checks only.','muted'));const link=make('a','Official rules ↗');link.href='https://magic.wizards.com/en/rules';link.target='_blank';link.rel='noopener noreferrer';list.append(link);detail.append(list);target.append(detail);}
+ }
+}
 function safeArtwork(value){return typeof value==='string'&&value.length<=250000&&/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(value)?value:'';}
 function coverSource(value){return safeArtwork(value?.coverData) || (value ? '/api/card-image?name='+encodeURIComponent(value.coverCard || value.commander || value.cards[0]?.name || '') : '');}
 function setCoverDraft(value){coverDraft=safeArtwork(value);updateCoverPreview();}
@@ -14,6 +29,7 @@ $('#cover-file').onchange=async event=>{
  }catch(error){$('#import-error').textContent=error.message || 'This image could not be read.';}
 };
 function renderDeckBrowser(){
+ renderCommanderCheck();
  const browser=$('#deck-browser');browser.replaceChildren();const cover=$('#analysis-cover');cover.src=coverSource(deck);cover.hidden=!deck;cover.onerror=()=>{cover.hidden=true;};cover.onload=()=>{cover.hidden=false;};
  if(!deck){browser.append(make('p','Choose a deck from the sidebar or upload your first list.','empty-state'));return;}
  document.querySelectorAll('[data-view]').forEach(button=>{button.classList.toggle('selected',button.dataset.view===deckView);button.setAttribute('aria-pressed',String(button.dataset.view===deckView));});
@@ -38,9 +54,10 @@ function renderStatistics(container){
 }
 async function refreshStatistics(){
  if(!deck||statsPending)return;statsPending=true;const current=deck;$('#refresh-stats').disabled=true;$('#analysis-status').textContent='Fetching card data…';
- try{const response=await fetch('/api/deck-analysis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({deck:{cards:current.cards,commander:current.commander}})});const result=await response.json();if(!response.ok)throw new Error(result.error);if(deck!==current)return;current.statistics=result;saveLibrary();$('#analysis-status').textContent=result.unknown_cards.length?'Some card data is missing; incomplete odds are not shown.':'Card data refreshed. Opening-hand odds use exact probabilities.';renderDeckBrowser();}
- catch(error){$('#analysis-status').textContent=error.message || 'Could not fetch card data. Try again.';}
- finally{statsPending=false;$('#refresh-stats').disabled=false;}
+ renderCommanderCheck();document.querySelectorAll('.identity-banner button').forEach(button=>{button.disabled=true;button.textContent='Checking…';});
+ try{const response=await fetch('/api/deck-analysis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({deck:{cards:current.cards,commander:current.commander,partner:current.partner || ''}})});const result=await response.json();if(!response.ok)throw new Error(result.error);if(deck!==current)return;current.statistics=result;current.commanderCheck=result.commander_check;saveLibrary();$('#analysis-status').textContent=result.unknown_cards.length?'Some card data is missing; incomplete odds are not shown.':'Card data refreshed. Opening-hand odds use exact probabilities.';renderDeckBrowser();}
+ catch(error){const text=error.message || 'Could not fetch card data. Try again.';$('#analysis-status').textContent=text;if(deck===current)$('#libby-deck-check').append(make('span',text));}
+ finally{statsPending=false;$('#refresh-stats').disabled=false;document.querySelectorAll('.identity-banner button').forEach(button=>{button.disabled=false;button.textContent='Check deck';});}
 }
 document.querySelectorAll('[data-view]').forEach(button=>button.onclick=()=>{deckView=button.dataset.view;renderDeckBrowser();});$('#deck-filter').oninput=renderDeckBrowser;$('#refresh-stats').onclick=refreshStatistics;
 function startNewDeck(){if(window.location.pathname==='/upload'){activateDeck(null);setCoverDraft('');$('#deck-name').focus();}else{sessionStorage.setItem('mtg-new-deck','true');tab('deck');}}

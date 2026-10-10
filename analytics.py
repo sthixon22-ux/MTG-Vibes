@@ -2,7 +2,9 @@
 from math import comb
 
 
-def summarize(deck, lookup):
+def validate_deck(deck):
+    if not isinstance(deck, dict):
+        raise ValueError('Choose a saved deck first.')
     cards = deck.get('cards', [])
     if not isinstance(cards, list) or not 1 <= len(cards) <= 250:
         raise ValueError('Choose a saved deck first.')
@@ -10,13 +12,24 @@ def summarize(deck, lookup):
         raise ValueError('Invalid deck list.')
     if sum(c['quantity'] for c in cards) > 250:
         raise ValueError('Deck exceeds 250 cards.')
-    commander = str(deck.get('commander', '')).casefold()
+    for key in ('commander', 'partner'):
+        if not isinstance(deck.get(key, ''), str) or len(deck.get(key, '')) > 200:
+            raise ValueError('Invalid commander name.')
+
+
+def summarize(deck, lookup):
+    validate_deck(deck)
+    cards = deck['cards']
+    commanders = {deck.get(key, '').strip().casefold() for key in ('commander', 'partner')} - {''}
+    excluded = set()
     total = lands = cheap = known = flex_lands = 0
     curve = [0] * 8
     unknown = []
     verified = []
     for entry in cards:
-        quantity = entry['quantity'] - (1 if entry['name'].casefold() == commander else 0)
+        name = entry['name'].casefold()
+        quantity = entry['quantity'] - (1 if name in commanders and name not in excluded else 0)
+        excluded.add(name)
         total += quantity
         try:
             card = lookup(entry['name'])

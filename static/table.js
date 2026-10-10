@@ -5,12 +5,12 @@ function snapshot(){return JSON.stringify({deckId:deck?.id,library,hand,mulligan
 function checkpoint(){undoStack.push(snapshot());if(undoStack.length>50)undoStack.shift();}
 function gameContext(){return {turn,life,library_count:library.length,battlefield:zones.battlefield,graveyard:zones.graveyard.map(c=>c.name),exile:zones.exile.map(c=>c.name),command_zone:zones.command.map(c=>c.name)};}
 function persistGame(){try{sessionStorage.setItem('mtgvibes-game',snapshot());}catch{}}
-function resetBoard(){zones={battlefield:[],graveyard:[],exile:[],command:deck?.commander?[gameCard(deck.commander)]:[]};selected=null;life=40;turn=1;undoStack=[];renderBoard();}
+function resetBoard(){zones={battlefield:[],graveyard:[],exile:[],command:commanderNames().map(gameCard)};selected=null;life=40;turn=1;undoStack=[];renderBoard();}
 function selectedCard(){if(!selected)return null;return selected.zone==='hand' ? (hand[selected.index] ? {name:hand[selected.index]}:null) : zones[selected.zone]?.[selected.index];}
 function selectGameCard(zone,index){selected={zone,index};renderBoard();}
 function moveSelected(destination){
  const card=selectedCard();if(!card||bottomNeeded||destination===selected.zone)return;
- if(destination==='command' && card.name.toLowerCase()!==deck.commander.toLowerCase())return;
+ if(destination==='command' && !isCommander(card.name))return;
  checkpoint();
  const source=selected.zone;
  if(source==='hand')hand.splice(selected.index,1);else zones[source].splice(selected.index,1);
@@ -23,7 +23,7 @@ function moveSelected(destination){
 function renderBoard(){
  $('#library-count').textContent=library.length;$('#life-count').textContent=life+' life';$('#turn-count').textContent='Turn '+turn;
  const card=selectedCard();$('#selection-label').textContent=card ? card.name+(card.counters ? ` · ${card.counters} counter(s)`:'') : 'Select a card to move it';
- document.querySelectorAll('[data-move]').forEach(button=>{button.disabled=!card||bottomNeeded>0||button.dataset.move===selected?.zone||(button.dataset.move==='command'&&card.name.toLowerCase()!==deck?.commander.toLowerCase());});
+ document.querySelectorAll('[data-move]').forEach(button=>{button.disabled=!card||bottomNeeded>0||button.dataset.move===selected?.zone||(button.dataset.move==='command'&&!isCommander(card.name));});
  $('#tap-card').disabled=!card||selected?.zone!=='battlefield';$('#counter-plus').disabled=$('#counter-minus').disabled=!card||selected?.zone==='hand';$('#zoom-card').disabled=!card;
  $('#undo-game').disabled=!undoStack.length;
  for(const [zone,target] of Object.entries({battlefield:'#battlefield',graveyard:'#graveyard',exile:'#exile',command:'#command-zone'})){
@@ -85,8 +85,8 @@ function selectedCardForHover(value){return value.zone==='hand'?hand[value.index
 try{
  const saved=JSON.parse(sessionStorage.getItem('mtgvibes-game')||'null');
  if(saved && saved.deckId===deck?.id && saved.playStarted && Array.isArray(saved.hand)&&Array.isArray(saved.library)&&saved.hand.every(n=>typeof n==='string')&&saved.library.every(n=>typeof n==='string')&&saved.hand.length+saved.library.length<=250 && saved.zones && Object.keys(zones).every(z=>Array.isArray(saved.zones[z]) && saved.zones[z].length<=250 && saved.zones[z].every(c=>typeof c.name==='string'))){({library,hand,mulligans,bottomNeeded,playStarted,zones,life,turn}=saved);}
- else zones.command=deck?.commander?[gameCard(deck.commander)]:[];
-}catch{zones.command=deck?.commander?[gameCard(deck.commander)]:[];}
+ else zones.command=commanderNames().map(gameCard);
+}catch{zones.command=commanderNames().map(gameCard);}
 renderHand();
 const routePage={'/upload':'deck','/analyze':'analyze','/playtest':'play'}[window.location.pathname.replace(/\/$/,'')] || 'chat';tab(routePage);if(routePage==='play'&&deck&&!playStarted)newHand();
 if(routePage==='chat'&&sessionStorage.getItem('libby-game-question')){sessionStorage.removeItem('libby-game-question');send('Libby, help me understand this hand and board. What is my best plan from here?');}

@@ -56,3 +56,13 @@ vm.runInContext(`
   if(zones.command.length!==0||zones.battlefield.length!==2||totalCards()!==before)throw new Error('Commander move failed');
 `,context);
 console.log('Goldfish zones, card conservation, tap, counters, undo, turn advance, and commander checks passed.');
+vm.runInContext(`
+  deck={id:'pair',name:'Partners',commander:'Alpha',partner:'Beta',cards:[{name:'Alpha',quantity:1},{name:'Beta',quantity:1},{name:'Forest',quantity:98}]};
+  newHand();
+  if(zones.command.length!==2||hand.length!==7||library.length!==91)throw new Error('Two-commander setup failed');
+  if(hand.some(isCommander)||library.some(isCommander))throw new Error('A partner remained in the library');
+  selectGameCard('command',1);moveSelected('battlefield');
+  selectGameCard('battlefield',0);moveSelected('command');
+  if(zones.command.length!==2||zones.battlefield.length)throw new Error('Second commander cannot return to command');
+`,context);
+console.log('Two-commander library exclusion, command-zone setup, and movement passed.');

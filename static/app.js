@@ -62,8 +62,10 @@ function parseList(text) {
   return result;
 }
 function count() { return deck?.cards.reduce((n,c) => n + c.quantity, 0) || 0; }
-function commanderPresent() { return deck?.cards.some(c => c.name.toLowerCase() === deck.commander.toLowerCase()); }
-function libraryCards() { return deck.cards.flatMap(c => Array(c.quantity - (c.name.toLowerCase() === deck.commander.toLowerCase() ? 1 : 0)).fill(c.name)); }
+function commanderNames() { return [deck?.commander,deck?.partner].filter(Boolean); }
+function isCommander(name) { return commanderNames().some(n=>n.toLowerCase()===name.toLowerCase()); }
+function commanderPresent() { return commanderNames().length>0 && commanderNames().every(n=>deck.cards.some(c=>c.name.toLowerCase()===n.toLowerCase())); }
+function libraryCards() { return deck.cards.flatMap(c => Array(c.quantity - (isCommander(c.name) ? 1 : 0)).fill(c.name)); }
 function stats() {
   const known = deck.cards.filter(c => metadata[c.name]);
   const lands = known.filter(c => /\bLand\b/.test(metadata[c.name].type_line || '')).reduce((n,c) => n + c.quantity,0);
@@ -77,7 +79,7 @@ function analysisText() {
   else if (!commanderPresent()) issues.push('Your commander must appear in the imported list.');
   const duplicates = deck.cards.filter(c => c.quantity > 1 && !/^(Snow-Covered )?(Plains|Island|Swamp|Mountain|Forest|Wastes)$/i.test(c.name));
   if (duplicates.length) issues.push(`Review repeated nonbasic cards: ${duplicates.map(c=>c.name).join(', ')}. Some cards explicitly allow extra copies.`);
-  return `${deck.name}: ${s.total} cards, ${s.unique} unique names.\n${issues.length ? issues.join('\n') : 'Card count and commander presence pass basic checks.'}\nScryfall data available for ${s.known}/${s.total} cards. ${s.lands} confirmed land cards${s.known < s.total ? ' (incomplete count)' : ''}.\nFull legality, color identity, ramp, and synergy checks are not yet implemented.`;
+  return `${deck.name}: ${s.total} cards, ${s.unique} unique names.\n${issues.length ? issues.join('\n') : 'Card count and commander presence pass basic checks.'}\nScryfall data available for ${s.known}/${s.total} cards. ${s.lands} confirmed land cards${s.known < s.total ? ' (incomplete count)' : ''}.\nRefresh card data for verified Commander construction checks.`;
 }
 function renderDeck() {
   $('#workspace-name').textContent = deck.name;
@@ -110,6 +112,7 @@ function activateDeck(value) {
   library = []; hand = []; playStarted = false; bottomNeeded = 0;
   $('#deck-name').value = value?.name || '';
   $('#commander').value = value?.commander || '';
+  $('#partner').value = value?.partner || '';
   $('#moxfield-url').value = value?.sourceUrl || '';
   $('#cover-card').value=value?.coverCard || '';
   if(typeof setCoverDraft==='function')setCoverDraft(value?.coverData || '');
@@ -119,6 +122,7 @@ function activateDeck(value) {
   else { $('#workspace-name').textContent='Add your first deck'; $('#active-name').textContent='Your next great deck'; $('#active-count').textContent='No active list'; $('#analysis').replaceChildren(); }
   updateSourceLinks(); restoreConversation(); renderLibrary(); renderHand();
   if(typeof resetBoard==='function') resetBoard();
+  if(typeof renderCommanderCheck==='function')renderCommanderCheck();
 }
 $('#manage-decks').onclick = () => tab('deck');
 $('#quick-add').onclick = () => { activateDeck(null); tab('deck'); $('#deck-name').focus(); };
@@ -159,10 +163,11 @@ async function loadCards() {
 $('#import-form').onsubmit = e => {
   e.preventDefault();
   try {
-    const cards = parseList($('#list').value), commander = $('#commander').value.trim();
+    const cards = parseList($('#list').value), commander = $('#commander').value.trim(), partner=$('#partner').value.trim();
+    if(partner && (!commander || partner.toLowerCase()===commander.toLowerCase() || !cards.some(c=>c.name.toLowerCase()===partner.toLowerCase()))) throw new Error('Choose two different commanders and include both in the list.');
     if (commander && !cards.some(c=>c.name.toLowerCase() === commander.toLowerCase())) throw new Error('Include your commander in the pasted list.');
     if(savedDecks.length>=30 && !editingId) throw new Error('You can save up to 30 decks on this device. Download a backup before deleting an older deck.');
-    const next = {id: editingId || crypto.randomUUID(), name: $('#deck-name').value.trim() || 'Commander deck', commander, sourceUrl: moxfieldUrl($('#moxfield-url').value), cards,coverCard:$('#cover-card').value.trim(),coverData:typeof coverDraft!=='undefined'?coverDraft:deck?.coverData || ''};
+    const next = {id: editingId || crypto.randomUUID(), name: $('#deck-name').value.trim() || 'Commander deck', commander, partner, sourceUrl: moxfieldUrl($('#moxfield-url').value), cards,coverCard:$('#cover-card').value.trim(),coverData:typeof coverDraft!=='undefined'?coverDraft:deck?.coverData || ''};
     const index = savedDecks.findIndex(d=>d.id===next.id);
     if(index<0) savedDecks.push(next); else savedDecks[index]=next;
     activateDeck(next); const persisted=saveLibrary(); $('#import-error').textContent=persisted?'Deck saved. Open Deck analysis or Playtest from the menu.':'Deck loaded, but browser storage is full. Download your list before leaving this page.';
@@ -240,7 +245,7 @@ async function send(prompt) {
     chatBusy = true; const currentDeck=deck, currentEpoch=chatEpoch;
     const button = $('#chat-form button'); button.disabled = true;
     const thinking = make('div','Thinking about your deck…','message'); $('#messages').append(thinking);
-    try { const r = await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:prompt,history:conversation.slice(-10),context:deck ? {deck:{name:deck.name,commander:deck.commander,cards:deck.cards,sourceUrl:deck.sourceUrl},analysis:analysisText(),current_hand:playStarted ? [...hand] : null,game:typeof gameContext==='function'?gameContext():null,verified_cards:deck.cards.filter(c=>metadata[c.name] || cardCache.has(c.name)).map(c=>{const m=metadata[c.name] || cardCache.get(c.name); return {name:m.name,type_line:m.type_line,mana_value:m.cmc,color_identity:m.color_identity};})} : {}})}); const data = await r.json(); if(deck!==currentDeck || chatEpoch!==currentEpoch) return; message(data.answer || data.error); if(!r.ok) $('.notice').textContent=data.error; if(r.ok && data.answer) {conversation.push({role:'user',content:prompt},{'role':'assistant','content':data.answer.slice(0,8000)}); conversation=conversation.slice(-20);storeConversation();if(data.mode==='computed')$('.notice').textContent='Computed from Scryfall card data. AI chat may still require a working OpenAI connection.';} }
+    try { const r = await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:prompt,history:conversation.slice(-10),context:deck ? {deck:{name:deck.name,commander:deck.commander,partner:deck.partner || '',cards:deck.cards,sourceUrl:deck.sourceUrl},analysis:analysisText(),current_hand:playStarted ? [...hand] : null,game:typeof gameContext==='function'?gameContext():null,verified_cards:deck.cards.filter(c=>metadata[c.name] || cardCache.has(c.name)).map(c=>{const m=metadata[c.name] || cardCache.get(c.name); return {name:m.name,type_line:m.type_line,mana_value:m.cmc,color_identity:m.color_identity};})} : {}})}); const data = await r.json(); if(deck!==currentDeck || chatEpoch!==currentEpoch) return; message(data.answer || data.error); if(!r.ok) $('.notice').textContent=data.error; if(r.ok && data.answer) {if(deck && data.construction && typeof renderCommanderCheck==='function'){deck.commanderCheck=data.construction;saveLibrary();renderCommanderCheck();}conversation.push({role:'user',content:prompt},{'role':'assistant','content':data.answer.slice(0,8000)}); conversation=conversation.slice(-20);storeConversation();if(data.mode==='computed')$('.notice').textContent='Computed from Scryfall card data. AI chat may still require a working OpenAI connection.';} }
     catch { message('The server could not be reached. Try again.'); }
     finally { thinking.remove(); button.disabled = false; chatBusy=false; $('#discuss-hand').disabled=!playStarted || bottomNeeded>0; }
   }
@@ -259,7 +264,7 @@ try {
     activateDeck(savedDecks.find(d=>d.id===saved.id)||savedDecks[0]);
   }
 } catch { /* Ignore invalid or unavailable browser storage. */ }
-fetch('/api/health').then(r=>r.json()).then(data=> { $('.notice').textContent=data.ai_configured ? 'Libby’s key is configured. Click the cube or ask a question below.' : 'Libby isn’t connected yet. Deck import, analysis, and playtesting are available.'; }).catch(()=>{ $('.notice').textContent='Connection unavailable. Refresh to reconnect.'; });
+fetch('/api/health').then(r=>r.json()).then(data=> { $('.notice').textContent=data.ai_configured ? 'Libby’s key is configured. Click Libby or ask a question below.' : 'Libby isn’t connected yet. Deck import, analysis, and playtesting are available.'; }).catch(()=>{ $('.notice').textContent='Connection unavailable. Refresh to reconnect.'; });
 renderLibrary();
 updateSourceLinks();
 renderHand();

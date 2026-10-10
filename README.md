@@ -28,9 +28,9 @@ The OpenAI key in the Codex cloud environment does not automatically move to Ren
 
 ## Use
 
-Click **Add a deck**, open your linked Moxfield deck, export its text list, and paste or upload the export in **My decks**. Include the commander in the list and enter its name separately. Click **Save deck & analyze**. Up to 30 decks are saved in browser local storage. Use the saved-deck selector to switch lists, **Download list** for backups, and **Delete deck** to remove a local copy. Decks do not sync between devices, and deleting a deck never changes Moxfield. Sideboard and maybeboard sections are excluded. The initial version supports one commander; partner/background configurations need a later implementation.
+Click **Add a deck**, open your linked Moxfield deck, export its text list, and paste or upload the export in **My decks**. Include the commander in the list and enter its name separately. Click **Save deck & analyze**. Up to 30 decks are saved in browser local storage. Use the saved-deck selector to switch lists, **Download list** for backups, and **Delete deck** to remove a local copy. Decks do not sync between devices, and deleting a deck never changes Moxfield. Sideboard and maybeboard sections are excluded. Enter an optional second commander for compatible Partner, named Partner, Background, or Doctor configurations. Include both in the list; both start in the command zone and are excluded from the library.
 
-Basic analysis checks the total count, commander presence, and potential duplicates. Fetch Scryfall data for confirmed land counts. It does not yet validate all Commander legality or classify ramp, removal, and synergy. Partial metadata is explicitly labeled.
+Refresh card data to check the 100-card total, commander eligibility/pair compatibility, singleton and Oracle copy exceptions, Commander legality, and color identity using Scryfall. Identity includes all faces and colored symbols, not just card color. Basic land types are checked separately. Missing data and unsupported pregame color choices prevent verified additions. Construction checks do not certify every companion condition or unusual restriction, and Rule 0 needs individual review.
 
 Opening hands exclude one copy of the selected commander. The first multiplayer mulligan is free; later mulligans require selecting cards to bottom. Draws consume cards without replacement. This is a manual tester, not a complete rules engine.
 
@@ -56,7 +56,7 @@ After a GitHub update, use Render → mtg-vibes → **Manual Deploy → Deploy l
 
 ## Libby and the goldfish table
 
-Click the animated cube on the homepage to start talking to Libby. Choose a saved deck in the sidebar to supply its full list. Libby receives that list, local analysis, and the current hand and board when present; it cannot directly read your Moxfield account. External Moxfield navigation goes to its homepage for sign-in.
+Click Libby’s animated spirit familiar on the homepage to start talking to Libby. Choose a saved deck in the sidebar to supply its full list. Libby receives that list, local analysis, and the current hand and board when present; it cannot directly read your Moxfield account. External Moxfield navigation goes to its homepage for sign-in.
 
 The separate `/playtest` page provides library, hand, battlefield, command zone, graveyard, and exile. Select a card, then use the move buttons; battlefield cards can tap and carry counters. Life, tokens, turn advance, top-card viewing, milling, library shuffling, and up to 50 undo snapshots are available. Multiplayer mulligans start with one free mulligan. New game clears the table. Game state survives navigation within the same browser tab; switching active decks resets the table. This is a manual goldfishing tool, not a rules engine.
 
@@ -66,7 +66,7 @@ OpenAI 429 errors are categorized: insufficient quota requires checking API cred
 
 ## Focused workspace and controls
 
-The homepage is Libby chat. `/upload` is deck import and editing; `/analyze` has image, text, and statistics views; `/playtest` is a fitted goldfishing workspace with a persistent hand tray. Large lists scroll within their own panels rather than extending the whole page. The theme uses navy, violet, and warm accents.
+The homepage is Libby chat. `/upload` is deck import and editing; `/analyze` has image, text, and statistics views; `/playtest` is a fitted goldfishing workspace with a persistent hand tray. Large lists scroll within their own panels rather than extending the whole page. The theme uses navy, violet, and warm accents over original ancient-spire fantasy artwork, with a luminous library spirit for Libby.
 
 Drag a card between hand, battlefield, graveyard, exile, command zone, or library. A library drop puts the card on top; Shift-drop puts it on the bottom. Touch dragging and click-plus-move controls are also available. Hover hotkeys: P battlefield, H hand, G graveyard, X exile, L library top, B library bottom, C command, T tap/untap, V enlarge, +/- counters. Global D draws, N advances turn, and U undoes. Hotkeys do not run inside text fields or the card viewer.
 
@@ -75,3 +75,11 @@ In Upload decks, select a cover card or upload PNG/JPEG/WebP artwork under 5 MB.
 Statistics use Scryfall metadata, counting front-face lands separately from flexible land back faces. The standard opening-hand check reports exact probabilities of exactly or at least three lands plus a nonland spell with mana value at most two in seven cards, before mulligans. Commander is excluded. Incomplete card data never produces invented odds. These calculations work without an OpenAI key or available quota. Free-form AI conversation still requires usable OpenAI API credentials and quota.
 
 **Check AI** sends one short model request and reports the result. An unclassified provider 429 is not labeled temporary. Check API billing/usage and the key’s project when quota is unavailable. The optional browser regression test is `PLAYWRIGHT_BROWSERS_PATH=/tmp/mtg-playwright python tests/browser_smoke.py` with Playwright, its Chromium browser, and Pillow installed; set MTG_TEST_URL to the running development server.
+
+## Verified Commander guidance
+
+Libby receives server-fetched Oracle text and all card faces for the active list, and a construction report rather than trusting browser-provided analysis. OpenAI Responses function tools provide exact Scryfall lookup, identity-filtered candidate searches, and local official-rules retrieval. A structured reply separates proposed additions from conversational analysis. The server checks each addition again for Commander legality, commander color identity, existing cards, and valid proposed cuts. Rejected drafts are retried within a bounded five-request/eight-tool budget and withheld if still invalid. Missing card data fails closed. This improves grounding; model strategy and complex rulings can still be mistaken and should be checked against the cited rules.
+
+The bundled official comprehensive rules snapshot is effective **September 25, 2026**, retrieved from https://magic.wizards.com/en/rules and https://media.wizards.com/2026/downloads/MagicCompRules%2020260925.txt. Libby includes standard Commander and partner rules directly, and can retrieve other numbered rules. Update the rules snapshot deliberately when Wizards publishes revisions. Scryfall metadata caches expire after one hour; current Commander legality comes from that metadata rather than a hard-coded ban list. Legendary Vehicle/eligible Spacecraft commander eligibility follows this snapshot. Brawl, Draft, and Duel Commander are distinct formats.
+
+Tests also exercise off-color hybrid/activated/devoid/back-face identities, reminder-text identity, typed lands, banned cards, copy exceptions, incompatible pairs, missing metadata, guarded model drafts, and rules tool conversations. No API credits are needed for construction checks or opening-hand statistics. AI conversations still require an OpenAI API key with available quota.
