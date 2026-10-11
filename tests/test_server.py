@@ -18,6 +18,7 @@ import server
 class ServerTests(unittest.TestCase):
     def setUp(self):
         server.CHAT_REQUESTS.clear()
+        server.VOICE_REQUESTS.clear()
     @classmethod
     def setUpClass(cls):
         cls.http = ThreadingHTTPServer(('127.0.0.1', 0), partial(server.Handler, directory=str(server.ROOT / 'static')))
@@ -191,6 +192,24 @@ class ServerTests(unittest.TestCase):
         check = json.loads(body)['commander_check']
         self.assertEqual(check['color_identity'], ['G'])
         self.assertIn('outside', ' '.join(check['issues']))
+
+    def test_transcription_requires_auth_origin_and_credentials(self):
+        audio={'audio':'YWJj','mime':'audio/webm'}
+        with patch.dict(os.environ,{'MTG_SITE_PASSWORD':'test-only'}):
+            self.assertEqual(self.request('/api/transcribe',audio)[0],401)
+        self.assertEqual(self.request('/api/transcribe',audio,{'Origin':'https://other.example'})[0],403)
+        with patch.dict(os.environ,{'MTG_OPENAI_API_KEY':''}):
+            self.assertEqual(self.request('/api/transcribe',audio)[0],503)
+
+    def test_transcription_endpoint_and_rate_limit(self):
+        import time
+        with patch.dict(os.environ,{'MTG_OPENAI_API_KEY':'test-only'}),patch('server.transcribe',return_value={'text':'Explain color identity.'}) as upstream:
+            status,body=self.request('/api/transcribe',{'audio':'YWJj','mime':'audio/webm'})
+            self.assertEqual(status,200)
+            self.assertEqual(json.loads(body)['text'],'Explain color identity.')
+            server.VOICE_REQUESTS[:]=[time.monotonic()]*10
+            self.assertEqual(self.request('/api/transcribe',{'audio':'YWJj','mime':'audio/webm'})[0],429)
+            self.assertEqual(upstream.call_count,1)
 
 
 if __name__ == '__main__':

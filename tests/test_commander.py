@@ -104,6 +104,8 @@ class CommanderTests(unittest.TestCase):
         found = find_rules('903.4c reminder text color identity')
         self.assertEqual(found['effective'], '2026-09-25')
         self.assertTrue(any(e['rule'] == '903.4c' and 'Reminder text is ignored' in e['text'] for e in found['excerpts']))
+        self.assertEqual(found['source'], 'https://yawgatog.com/resources/magic-rules/')
+        self.assertTrue(any(e['url'].endswith('#R9034c') for e in found['excerpts']))
 
     def test_off_color_and_hallucinated_cuts_withhold_draft(self):
         self.cards['Blue Spell'] = card('Blue Spell', 'U')

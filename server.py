@@ -8,6 +8,7 @@ import re
 from analytics import summarize, odds_answer
 from commander import check_deck, addition_errors
 from libby import ask
+from voice import transcribe
 import time
 import urllib.error
 import urllib.parse
@@ -24,6 +25,7 @@ LAST_REQUEST = 0.0
 CACHE_TIMES = {}
 CARD_CACHE_SECONDS = 3600
 CHAT_REQUESTS = []
+VOICE_REQUESTS = []
 IMAGE_CACHE = ROOT / ".card-images"
 IMAGE_LOCK = Lock()
 IMAGE_DOWNLOAD_LOCKS = {}
@@ -123,7 +125,7 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         if not self.authorized():
             return
-        if self.path not in ('/api/chat', '/api/deck-analysis'):
+        if self.path not in ('/api/chat', '/api/deck-analysis', '/api/transcribe'):
             return self.send_json(404, {'error': 'Unknown endpoint.'})
         origin = self.headers.get('Origin')
         parsed_origin = urllib.parse.urlsplit(origin or '')
@@ -131,9 +133,20 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json(403, {'error': 'Cross-origin requests are not supported.'})
         try:
             size = int(self.headers.get('Content-Length', '0'))
-            if not 0 < size <= 128000:
+            if not 0 < size <= (8100000 if self.path == '/api/transcribe' else 128000):
                 return self.send_json(400, {'error': 'Request is too large or empty.'})
             data = json.loads(self.rfile.read(size))
+            if self.path == '/api/transcribe':
+                key = os.environ.get('MTG_OPENAI_API_KEY')
+                if not key:
+                    return self.send_json(503, {'error': 'Voice transcription needs a working OpenAI API key on the server.'})
+                with LOCK:
+                    now = time.monotonic()
+                    VOICE_REQUESTS[:] = [stamp for stamp in VOICE_REQUESTS if now - stamp < 60]
+                    if len(VOICE_REQUESTS) >= 10:
+                        return self.send_json(429, {'error': 'Please wait a minute before sending more voice questions.'})
+                    VOICE_REQUESTS.append(now)
+                return self.send_json(200, transcribe(data, key))
             message = data.get('message', 'Deck statistics' if self.path == '/api/deck-analysis' else '')
             if not isinstance(message, str) or not 0 < len(message) <= 4000:
                 return self.send_json(400, {'error': 'Enter a message up to 4000 characters.'})

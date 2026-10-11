@@ -1,5 +1,6 @@
 """Commander construction checks based on official rules and Scryfall Oracle data."""
 import re
+import json
 from collections import Counter
 from pathlib import Path
 
@@ -7,6 +8,8 @@ RULES_SOURCE = 'https://magic.wizards.com/en/rules'
 RULES_DATE = '2026-09-25'
 RULEBOOK = (Path(__file__).parent / 'rules/comprehensive-20260925.txt').read_text()
 RULES = dict(re.findall(r'^([1-9]\d\d\.\d+[a-z]?)[. ]+(.+?)(?=\n[1-9]\d\d\.\d|\Z)', RULEBOOK, re.M | re.S))
+YAWGATOG = json.loads((Path(__file__).parent / 'rules/yawgatog-20260925.json').read_text())
+YAWGATOG_SOURCE = YAWGATOG['source']
 CORE_RULES = '\n\n'.join(f'{n}. {text.strip()}' for n, text in RULES.items() if n.startswith(('903.', '702.124')) and not n.startswith(('903.12', '903.13')))
 COLORS = set('WUBRG')
 LAND_COLORS = {'Plains': 'W', 'Island': 'U', 'Swamp': 'B', 'Mountain': 'R', 'Forest': 'G'}
@@ -160,4 +163,9 @@ def find_rules(query):
     numbers = set(re.findall(r'\b[1-9]\d\d\.\d+[a-z]?\b', query))
     tokens = set(re.findall(r'[a-z]{4,}', query.lower())) - {'what', 'when', 'does', 'that', 'with', 'have', 'this', 'rules', 'about', 'commander'}
     ranked = sorted(RULES.items(), key=lambda pair: (pair[0] in numbers, sum(len(t) for t in tokens if t in pair[1].lower())), reverse=True)
-    return {'source': RULES_SOURCE, 'effective': RULES_DATE, 'excerpts': [{'rule': n, 'text': t.strip()[:5000]} for n, t in ranked[:8] if n in numbers or any(w in t.lower() for w in tokens)]}
+    return {'source': YAWGATOG_SOURCE, 'official_source': RULES_SOURCE, 'effective': RULES_DATE, 'excerpts': [{'rule': n, 'text': YAWGATOG['rules'].get(n, {}).get('text', t.strip())[:5000], 'url': rule_url(n)} for n, t in ranked[:8] if n in numbers or any(w in t.lower() for w in tokens)]}
+
+
+def rule_url(number):
+    entry = YAWGATOG['rules'].get(number)
+    return YAWGATOG_SOURCE + '#' + entry['anchor'] if entry else RULES_SOURCE
