@@ -150,11 +150,17 @@ def check_deck(deck, lookup):
     if not verified:
         issues.append('Commander color identity is not fully verified; additions will not be recommended.')
     check.update({'status': 'issues' if issues else 'passed', 'issues': issues, 'unknown_cards': unknown, 'commanders': names, 'total': total, 'rules_date': RULES_DATE, 'rules_source': RULES_SOURCE, 'scope': 'Construction checks only; companion conditions, unusual deck-building effects, and Rule 0 agreements need individual review.'})
-    return check, [{**card, 'deck_quantity': counts[key]} for key, card in cards_by_name.items()]
+    imported_names = {}
+    for entry in deck['cards']:
+        card = resolved.get(entry['name'].casefold())
+        if card:
+            key = card.get('oracle_id') or card.get('name', entry['name']).casefold()
+            imported_names.setdefault(key, []).append(entry['name'])
+    return check, [{**card, 'deck_quantity': counts[key], 'imported_names': imported_names[key]} for key, card in cards_by_name.items()]
 
 
 def card_facts(card):
-    facts = {key: card.get(key) for key in ('name', 'deck_quantity', 'mana_cost', 'cmc', 'type_line', 'color_identity', 'oracle_text', 'legalities', 'power', 'toughness', 'keywords', 'scryfall_uri')}
+    facts = {key: card.get(key) for key in ('name', 'deck_quantity', 'imported_names', 'mana_cost', 'cmc', 'type_line', 'color_identity', 'oracle_text', 'legalities', 'power', 'toughness', 'keywords', 'scryfall_uri')}
     facts['card_faces'] = [{key: face.get(key) for key in ('name', 'mana_cost', 'type_line', 'oracle_text', 'colors', 'color_indicator', 'power', 'toughness')} for face in card.get('card_faces', [])]
     return facts
 
