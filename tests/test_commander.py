@@ -115,7 +115,9 @@ class CommanderTests(unittest.TestCase):
         self.assertEqual(reply['recommendations'], [])
         self.cards['Legal Spell'] = card('Legal Spell', 'G')
         reply = verify_reply({'answer': 'Upgrade.', 'recommendations': [{'name': 'Legal Spell', 'reason': 'Ramp', 'cut': 'Invented Card'}]}, self.check(), {'rock': self.cards['Rock']}, '', self.cards.__getitem__)
-        self.assertEqual(reply['mode'], 'guarded')
+        self.assertEqual(reply['recommendations'][0]['name'], 'Legal Spell')
+        self.assertEqual(reply['recommendations'][0]['cut'], '')
+        self.assertIn('Omitted an unsupported', reply['validation_notes'][0])
 
     def test_verified_additions_and_user_illegal_card_discussion(self):
         self.cards['New Card'] = card('New Card', 'G')

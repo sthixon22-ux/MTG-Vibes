@@ -9,6 +9,7 @@ from analytics import summarize, odds_answer
 from commander import check_deck, addition_errors
 from libby import ask
 from voice import transcribe
+from strategy import edhrec_candidates
 import time
 import urllib.error
 import urllib.parse
@@ -175,7 +176,7 @@ class Handler(SimpleHTTPRequestHandler):
             active = context.get('deck') if isinstance(context, dict) else None
             if isinstance(active, dict):
                 prime_cards(active)
-            result = ask(key, os.environ.get('MTG_OPENAI_MODEL', 'gpt-4.1-mini'), message, context, history, lookup_card, search_cards)
+            result = ask(key, os.environ.get('MTG_OPENAI_MODEL', 'gpt-4.1-mini'), message, context, history, lookup_card, search_cards, commander_recs=lambda check, known: edhrec_candidates(check, known, lookup_card, message))
             return self.send_json(502 if result.get('error') else 200, result)
         except (ValueError, TypeError, AttributeError):
             return self.send_json(400, {'error': 'Invalid request.'})
