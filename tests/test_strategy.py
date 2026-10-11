@@ -28,7 +28,7 @@ class StrategyTests(unittest.TestCase):
     def test_questions_only_get_concrete_verified_fallback(self):
         draft = {'answer': 'What is your budget and power level?', 'recommendations': []}
         with patch('libby.urllib.request.urlopen', side_effect=[response(draft) for _ in range(3)]) as upstream:
-            reply = ask('test', 'model', 'Suggest improvements', {'deck': self.deck}, [], self.cards.__getitem__, lambda *args: list(self.cards.values()))
+            reply = ask('test', 'model', 'Suggest improvements', {'deck': self.deck}, [], self.cards.__getitem__, lambda *args: list(self.cards.values()), reviewer=lambda *args: {'supported': True, 'issues': []})
         self.assertEqual(upstream.call_count, 3)
         self.assertEqual({r['name'] for r in reply['recommendations']}, {'Ramp', 'Draw', 'Removal'})
         self.assertNotIn('?', reply['answer'])
@@ -79,7 +79,7 @@ class StrategyTests(unittest.TestCase):
         tool = {'output': [{'type': 'function_call', 'name': 'research_magic', 'arguments': json.dumps({'query': 'Commander strategy'}), 'call_id': 'one'}]}
         draft = {'answer': 'Your commander has black and green identity.', 'recommendations': []}
         with patch('libby.urllib.request.urlopen', side_effect=[io.BytesIO(json.dumps(tool).encode()), response(draft)]):
-            reply = ask('test', 'model', 'Explain my commander', {'deck': self.deck}, [], self.cards.__getitem__, lambda *args: [], research=lambda query: (_ for _ in ()).throw(OSError('unavailable')))
+            reply = ask('test', 'model', 'Explain my commander', {'deck': self.deck}, [], self.cards.__getitem__, lambda *args: [], research=lambda query: (_ for _ in ()).throw(OSError('unavailable')), reviewer=lambda *args: {'supported': True, 'issues': []})
         self.assertIn('black and green', reply['answer'])
         self.assertEqual(reply['sources'], [])
 

@@ -132,7 +132,7 @@ class CommanderTests(unittest.TestCase):
             {'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': json.dumps({'answer': 'Commander tax adds {2} per prior command-zone cast (903.8).', 'recommendations': []})}]}]}
         ]
         with patch('libby.urllib.request.urlopen', side_effect=[io.BytesIO(json.dumps(o).encode()) for o in outputs]) as upstream:
-            answer = ask('test-only', 'gpt-4.1-mini', 'How does commander tax work?', {'deck': self.deck, 'analysis': 'Blue cards are legal'}, [], self.cards.__getitem__, lambda *args: [])
+            answer = ask('test-only', 'gpt-4.1-mini', 'How does commander tax work?', {'deck': self.deck, 'analysis': 'Blue cards are legal'}, [], self.cards.__getitem__, lambda *args: [], reviewer=lambda *args: {'supported': True, 'issues': []})
             payload = json.loads(upstream.call_args.args[0].data)
         self.assertIn('903.8', answer['answer'])
         self.assertIn('color_identity', payload['input'][0]['content'])
@@ -143,11 +143,11 @@ class CommanderTests(unittest.TestCase):
         self.cards['Blue'] = card('Blue', 'U')
         self.cards['Green'] = card('Green', 'G')
         outputs = []
-        for name in ('Blue', 'Green'):
+        for name in ('Blue', 'Green', 'Green'):
             draft = {'answer': 'One optional improvement.', 'recommendations': [{'name': name, 'reason': 'Fits this plan.', 'cut': 'Rock'}]}
             outputs.append({'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': json.dumps(draft)}]}]})
         with patch('libby.urllib.request.urlopen', side_effect=[io.BytesIO(json.dumps(o).encode()) for o in outputs]) as upstream:
-            reply = ask('test-only', 'gpt-4.1-mini', 'Suggest a card', {'deck': self.deck}, [], self.cards.__getitem__, lambda *args: [])
-        self.assertEqual(upstream.call_count, 2)
+            reply = ask('test-only', 'gpt-4.1-mini', 'Suggest a card', {'deck': self.deck}, [], self.cards.__getitem__, lambda *args: [], reviewer=lambda *args: {'supported': True, 'issues': []})
+        self.assertEqual(upstream.call_count, 3)
         self.assertEqual(reply['recommendations'][0]['name'], 'Green')
         self.assertNotIn('Blue', reply['answer'])

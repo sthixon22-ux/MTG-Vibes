@@ -26,7 +26,7 @@ class CutTests(unittest.TestCase):
         self.assertEqual(self.task['count'], 13)
         search, publisher = Mock(), Mock()
         with patch('libby.urllib.request.urlopen', return_value=response(self.draft)) as upstream:
-            reply = ask('test', 'model', QUESTION, {'deck': self.deck}, [], self.cards.__getitem__, search, commander_recs=publisher)
+            reply = ask('test', 'model', QUESTION, {'deck': self.deck}, [], self.cards.__getitem__, search, commander_recs=publisher, reviewer=lambda *args: {'supported': True, 'issues': []})
         search.assert_not_called()
         publisher.assert_not_called()
         self.assertEqual(reply['total_after'], 100)
@@ -43,7 +43,7 @@ class CutTests(unittest.TestCase):
     def test_additions_only_reply_is_repaired_not_returned(self):
         bad = {'answer': 'Add Counterspell.', 'recommendations': [{'name': 'Counterspell', 'reason': 'Good.', 'cut': ''}], 'cuts': []}
         with patch('libby.urllib.request.urlopen', side_effect=[response(bad), response(self.draft)]) as upstream:
-            reply = ask('test', 'model', QUESTION, {'deck': self.deck}, [], self.cards.__getitem__, Mock())
+            reply = ask('test', 'model', QUESTION, {'deck': self.deck}, [], self.cards.__getitem__, Mock(), reviewer=lambda *args: {'supported': True, 'issues': []})
         self.assertEqual(upstream.call_count, 2)
         self.assertNotIn('Counterspell', reply['answer'])
         self.assertEqual(reply['total_after'], 100)
@@ -73,7 +73,7 @@ class CutTests(unittest.TestCase):
     def test_failed_repairs_never_fallback_to_additions(self):
         draft = {'answer': 'What do you want to cut?', 'recommendations': [], 'cuts': []}
         with patch('libby.urllib.request.urlopen', side_effect=[response(draft) for _ in range(3)]):
-            reply = ask('test', 'model', QUESTION, {'deck': self.deck}, [], self.cards.__getitem__, Mock())
+            reply = ask('test', 'model', QUESTION, {'deck': self.deck}, [], self.cards.__getitem__, Mock(), reviewer=lambda *args: {'supported': True, 'issues': []})
         self.assertEqual(reply['code'], 'unverified_cuts')
         self.assertIn('active deck list', reply['error'])
 

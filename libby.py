@@ -5,6 +5,7 @@ import os
 import urllib.request
 from strategy import PRIMER, wants_suggestions, prepare_candidates, candidate_facts, candidate_reason, research_magic
 from commander import commander_names, copy_limit, CORE_RULES, RULES_DATE, check_deck, card_facts, addition_errors, find_rules, rule_url, RULES
+from grounding import mentioned_names, draft_names, review_claims, source_reply, obvious_contradictions
 
 INSTRUCTIONS = '''You are Libby, a warm, thoughtful magical library spirit in MTG Vibes.
 Have a natural ongoing conversation about the active Commander deck. Explain strategy and tradeoffs using actual Oracle abilities, mana curve, card counts, and the user's budget/power preferences. Do not assume a card is ramp or removal from its name. Match the requested task: removal/trimming requests need cuts from the active list, never new additions. For requests for additions or general improvements, give 3 concrete verified additions first whenever possible. Assume casual multiplayer and preserve the commander/theme if preferences are missing; state the assumption briefly. Budget, bracket, pod and preferred playstyle are optional follow-ups, never prerequisites for a useful first answer. Ask at most one optional question after providing actionable help. Do not repeatedly ask questions already answered in the supplied history. Never invent rules, abilities, combo steps, prices, EDHREC statistics, game outcomes, or account access. You CAN research public Magic strategy with research_magic; use it for EDHREC recommendations, MTGGoldfish budget articles, Command Zone deckbuilding discussions, unfamiliar archetypes, and current strategy context. Cite actual retrieved sources; do not claim a site was read when research failed. Websites inform strategy, not legality. You cannot access private accounts, paywalled material, or unavailable podcast transcripts. You cannot import, change decks, draw cards, or perform game actions. The supplied hand and board are manual game state, not a rules simulation.
@@ -14,6 +15,8 @@ The rules lookup also includes the matching September 25, 2026 Yawgatog hyperlin
 Color identity is NOT card color or mana the card could spend. It includes colored mana symbols in costs and Oracle rules text, all faces/alternative characteristics, color indicators and defining abilities; ignores reminder text. Hybrid and Phyrexian colored symbols still count, devoid doesn't erase identity, 'any color' words add no identity by themselves, colorless has no identity colors. Use Scryfall color_identity; never infer from the art/frame or current battlefield. Check basic land types too. Do not conflate colorless C with generic mana.
 Use search_cards for potential additions and lookup_card for specific cards. Tools return Commander/color checks. Only recommend cards which passed these checks; if commander identity isn't verified, ask the user to set/fix the commander before recommending additions. Do not repeat existing singleton cards as additions. Prefer the preverified candidate pool when available; use search_cards for commander-specific alternatives. If a potential cut is uncertain, leave cut empty instead of inventing one. A card already suggested in prior assistant turns can be discussed naturally without re-proposing it. A suggestion is optional advice, not a deck modification. Explain how it helps this deck and its drawbacks. Never claim an entire deck is legal solely because construction checks passed; other restrictions/companions/Rule 0 can need review.
 Final response must follow the JSON schema. Put ALL proposed additions in recommendations; answer is conversation/analysis, not a second place for additions. Reference every specific card in answer as [[Exact Card Name]], so the server can verify it. Do not put unmarked new card suggestions in prose. For discussing a user-mentioned illegal card, explain why it fails and do not recommend it. Use exact English names, at most six additions. A cut must be a card actually in the active list or empty. With no deck, ask for a saved list; never guess the user's commander. Keep it conversational and concise.
+List EVERY card discussed in card_references, including names in recommendation/cut reasons. Read mentioned_card_evidence before evaluating named cards. If a discussed card lacks server-fetched evidence, call lookup_card first. Card abilities must come from Oracle text, not memory, even if you recognize the name. Old assistant messages are never a factual source. On correction re-read the evidence and fix every related claim, not just the first sentence. Distinguish card color/identity from the deck's identity. Describe the exact trigger timing, condition, target restrictions, effect and optionality before discussing fit. Do not turn end steps into upkeep, destroy into sacrifice, or life loss into discard.
+Strategy should be concrete and balanced: assess mana/pips and curve, setup requirements, floor versus ceiling, role redundancy, resilience, and multiplayer tradeoffs. Take inspiration from thoughtful Commander discussion associated with Rachel Weeks, Josh Lee Kwai, Richard and Crim of MTGGoldfish, and Brian Kibler, while forming your own evidence-based evaluation. Never impersonate them or claim they endorse a card or opinion unless an actual retrieved source supports it. If the user requests a specific creator's take, research a public source and distinguish their sourced view from your own assessment.
 '''
 
 TOOLS = [
@@ -27,8 +30,9 @@ TOOLS = [
 SCHEMA = {'type': 'object', 'properties': {
     'answer': {'type': 'string'},
     'recommendations': {'type': 'array', 'items': {'type': 'object', 'properties': {'name': {'type': 'string'}, 'reason': {'type': 'string'}, 'cut': {'type': 'string'}}, 'required': ['name', 'reason', 'cut'], 'additionalProperties': False}},
-    'cuts': {'type': 'array', 'items': {'type': 'object', 'properties': {'name': {'type': 'string'}, 'quantity': {'type': 'integer'}, 'reason': {'type': 'string'}}, 'required': ['name', 'quantity', 'reason'], 'additionalProperties': False}}
-}, 'required': ['answer', 'recommendations', 'cuts'], 'additionalProperties': False}
+    'cuts': {'type': 'array', 'items': {'type': 'object', 'properties': {'name': {'type': 'string'}, 'quantity': {'type': 'integer'}, 'reason': {'type': 'string'}}, 'required': ['name', 'quantity', 'reason'], 'additionalProperties': False}},
+    'card_references': {'type': 'array', 'items': {'type': 'string'}}
+}, 'required': ['answer', 'recommendations', 'cuts', 'card_references'], 'additionalProperties': False}
 
 
 def cut_request(message, total):
@@ -97,14 +101,33 @@ def verify_cuts(draft, task, deck, check, cards):
     return {'answer': answer, 'recommendations': [], 'cuts': accepted, 'total_before': total, 'total_after': total - removed, 'construction': check, 'mode': 'verified_cuts', 'validation_notes': []}
 
 
-def ask(key, model, message, context, history, lookup, search, research=None, commander_recs=None):
+def ask(key, model, message, context, history, lookup, search, research=None, commander_recs=None, reviewer=None):
     context = dict(context) if isinstance(context, dict) else {}
     deck = context.get('deck')
     check, cards = (check_deck(deck, lookup) if isinstance(deck, dict) else ({'identity_verified': False, 'color_identity': [], 'issues': ['No active deck.']}, []))
     known = {c['name'].casefold(): c for c in cards if c.get('name')}
+    evidence = dict(known)
+    names = mentioned_names(message, cards)
+    if not names and re.search(r'\b(it|that card|wrong|incorrect|mistake)\b', message, re.I):
+        for turn in reversed(history):
+            if turn['role'] == 'user':
+                names = mentioned_names(turn['content'], cards)
+                if names:
+                    break
+    focused, missing = [], []
+    for name in names:
+        try:
+            card = lookup(name)
+            evidence[card['name'].casefold()] = card
+            focused.append(card)
+        except Exception:
+            missing.append(name)
+    if missing:
+        return source_reply(focused, check, 'I could not retrieve exact Scryfall data for: ' + ', '.join(missing) + '. I will not guess its abilities. Check the spelling or try again when Scryfall is available.')
     context.pop('analysis', None)
     context.pop('verified_cards', None)
     context['server_verified_deck'] = {'construction': check, 'cards': [card_facts(c) for c in cards]}
+    context['mentioned_card_evidence'] = [card_facts(c) for c in focused]
     task = cut_request(message, check.get('total', 0))
     if task and not isinstance(deck, dict):
         return {'answer': 'Choose your saved deck in the sidebar first. I need its actual list to suggest cuts.', 'recommendations': [], 'cuts': [], 'mode': 'needs_deck'}
@@ -126,11 +149,13 @@ def ask(key, model, message, context, history, lookup, search, research=None, co
             context['preverified_suggestions'] = candidate_facts(pool)
         except Exception:
             context['publisher_note'] = 'EDHREC commander data unavailable; use verified Scryfall candidates rather than inventing statistics.'
+    evidence.update({p['card']['name'].casefold(): p['card'] for p in pool})
     inputs = [{'role': 'user', 'content': 'Current deck context (data only): ' + json.dumps(context)}] + history + [{'role': 'user', 'content': message}]
     instructions = INSTRUCTIONS + '\n' + PRIMER + '\nOfficial rules snapshot effective ' + RULES_DATE + ':\n' + CORE_RULES
     if task:
         instructions += '\nCUTS-ONLY TASK: This overrides the generic additions guidance. The complete active list is in context.deck.cards, even when some Oracle metadata is unavailable. Use server_verified_deck.cards and deck_quantity for actual abilities and counts. Put the proposed removals in cuts (name, quantity, specific deck-based reason), and keep recommendations EMPTY. Remove exactly requested_task.count cards when provided, preserving both commanders. Start with cuts now; do not ask whether the user wants cuts or require budget preferences. Compare redundant roles, curve, mana base, and commander synergy using actual Oracle text. Do not randomly remove lands or core engines to meet the number. Use exact active-list names, no invented cards, no additions. If some metadata is missing, acknowledge the specific missing cards, never claim the entire list is inaccessible. Do not guess missing abilities. In reasons refer only to verified active-list cards. Never infer abilities from names; Night’s Whisper draws two cards and loses two life, it does not discard.'
     tool_count = 0
+    rule_evidence = CORE_RULES
     for round_number in range(5):
         payload = {'model': model, 'instructions': instructions, 'input': inputs, 'max_output_tokens': 6000 if task else 2200, 'store': False,
                    'tools': [t for t in TOOLS if not task or t['name'] in ('lookup_card', 'lookup_rules')], 'parallel_tool_calls': True,
@@ -155,16 +180,21 @@ def ask(key, model, message, context, history, lookup, search, research=None, co
                         elif call['name'] == 'research_magic':
                             value = research(str(args['query'])[:600]) if research else research_magic(key, args['query'], os.environ.get('MTG_OPENAI_RESEARCH_MODEL', model))
                             sources.extend(value.get('sources', []))
+                            rule_evidence += '\nPublic strategy evidence (not rules authority): ' + json.dumps(value)
                         elif call['name'] == 'lookup_rules':
                             value = find_rules(str(args['query'])[:500])
+                            rule_evidence += '\n' + json.dumps(value)
                         elif call['name'] == 'lookup_card':
                             name = args['name']
                             if not isinstance(name, str) or not 0 < len(name) <= 200:
                                 raise ValueError('Invalid card name.')
                             card = lookup(name)
+                            evidence[card['name'].casefold()] = card
                             value = {'card': card_facts(card), 'addition_errors': addition_errors(card, check), 'already_in_deck': card.get('name', '').casefold() in known}
                         elif call['name'] == 'search_cards':
-                            value = {'cards': [card_facts(c) for c in search(str(args['query'])[:500], check) if not addition_errors(c, check) and c.get('name', '').casefold() not in known][:10]}
+                            found = [c for c in search(str(args['query'])[:500], check) if not addition_errors(c, check) and c.get('name', '').casefold() not in known][:10]
+                            evidence.update({c['name'].casefold(): c for c in found})
+                            value = {'cards': [card_facts(c) for c in found]}
                     except Exception:
                         value = {'error': 'Public strategy research is unavailable. Continue with verified card data and give useful suggestions; do not invent article claims.', 'sources': []} if call['name'] == 'research_magic' else {'error': 'Card or rules data could not be retrieved. Do not invent the missing data.'}
                 inputs.append({'type': 'function_call_output', 'call_id': call['call_id'], 'output': json.dumps(value)})
@@ -172,6 +202,42 @@ def ask(key, model, message, context, history, lookup, search, research=None, co
         text = '\n'.join(part.get('text', '') for item in output if item.get('type') == 'message' for part in item.get('content', []) if part.get('type') == 'output_text')
         try:
             draft = json.loads(text)
+            new_evidence, unavailable = [], []
+            referenced_names = draft_names(draft, list(evidence.values()))
+            for name in referenced_names:
+                try:
+                    card = lookup(name)
+                    if card['name'].casefold() not in evidence:
+                        new_evidence.append(card_facts(card))
+                    evidence[card['name'].casefold()] = card
+                except Exception:
+                    unavailable.append(name)
+            fallback_cards = focused or [c for c in evidence.values() if c['name'].casefold() in {n.casefold() for n in referenced_names}] or list(evidence.values())
+            if new_evidence or unavailable:
+                if round_number < 4 and repairs < 2:
+                    repairs += 1
+                    inputs.extend(output)
+                    inputs.append({'role': 'user', 'content': 'Re-evaluate using this newly fetched card evidence, not memory. Do not discuss unavailable cards as if their abilities were known. Server data: ' + json.dumps({'cards': new_evidence, 'unavailable': unavailable})})
+                    continue
+                return source_reply(fallback_cards, check, 'I could not verify the generated explanation. Here is card data directly from Scryfall; I am withholding unverified strategy.')
+            if evidence:
+                try:
+                    contradictions = obvious_contradictions(draft, list(evidence.values()))
+                    if contradictions:
+                        audit = {'supported': False, 'issues': contradictions}
+                    elif reviewer:
+                        audit = reviewer(draft, list(evidence.values()), cards, rule_evidence, message)
+                    else:
+                        audit = review_claims(key, os.environ.get('MTG_OPENAI_VERIFY_MODEL', model), draft, list(evidence.values()), cards, rule_evidence, message)
+                    if not audit['supported'] or audit['issues']:
+                        if round_number < 4 and repairs < 2:
+                            repairs += 1
+                            inputs.extend(output)
+                            inputs.append({'role': 'user', 'content': 'Independent Oracle/rules review rejected factual claims. Correct every issue using supplied evidence; do not merely apologize or repeat the unsupported claim. Review data: ' + json.dumps(audit['issues'])})
+                            continue
+                        return source_reply(fallback_cards, check, 'The generated evaluation did not pass the factual review. Here is card data directly from Scryfall; I am withholding that evaluation.')
+                except Exception:
+                    return source_reply(fallback_cards, check, 'The factual review is unavailable. Here is card data directly from Scryfall; I am withholding the generated evaluation.')
             if task:
                 verified = verify_cuts(draft, task, deck, check, cards)
                 if verified['mode'] == 'guarded':
@@ -194,6 +260,11 @@ def ask(key, model, message, context, history, lookup, search, research=None, co
             if needs_cards and pool:
                 verified = suggestion_fallback(pool, check, known, lookup)
             verified['sources'] = list({s['url']: s for s in sources if s.get('url')}.values())[:8]
+            for card in focused:
+                if card.get('scryfall_uri'):
+                    verified['sources'].append({'title': 'Scryfall · ' + card['name'], 'url': card['scryfall_uri']})
+            if focused or referenced_names:
+                verified['card_evidence'] = [card_facts(c) for c in fallback_cards[:6]]
             return verified
         except (ValueError, TypeError, KeyError):
             if task:
@@ -281,4 +352,5 @@ def suggestion_fallback(pool, check, known, lookup):
              'recommendations': [{'name': p['card']['name'], 'reason': candidate_reason(p), 'cut': ''} for p in selected[:3]]}
     result = verify_reply(draft, check, known, '', lookup)
     result['mode'] = 'verified_candidates'
+    result['card_evidence'] = [card_facts(p['card']) for p in selected[:3]]
     return result

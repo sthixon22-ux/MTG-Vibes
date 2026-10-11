@@ -160,7 +160,7 @@ def check_deck(deck, lookup):
 
 
 def card_facts(card):
-    facts = {key: card.get(key) for key in ('name', 'deck_quantity', 'imported_names', 'mana_cost', 'cmc', 'type_line', 'color_identity', 'oracle_text', 'legalities', 'power', 'toughness', 'keywords', 'scryfall_uri')}
+    facts = {key: card.get(key) for key in ('name', 'deck_quantity', 'imported_names', 'mana_cost', 'cmc', 'type_line', 'colors', 'color_identity', 'oracle_text', 'legalities', 'power', 'toughness', 'keywords', 'scryfall_uri')}
     facts['card_faces'] = [{key: face.get(key) for key in ('name', 'mana_cost', 'type_line', 'oracle_text', 'colors', 'color_indicator', 'power', 'toughness')} for face in card.get('card_faces', [])]
     return facts
 

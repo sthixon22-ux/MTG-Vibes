@@ -91,7 +91,7 @@ class ServerTests(unittest.TestCase):
         from test_cuts import CutTests, QUESTION, response
         fixture = CutTests()
         fixture.setUp()
-        with patch.dict(os.environ, {'MTG_OPENAI_API_KEY': 'test-only'}), patch('server.prime_cards'), patch('server.lookup_card', side_effect=fixture.cards.__getitem__), patch('libby.urllib.request.urlopen', return_value=response(fixture.draft)), patch('server.search_cards') as search, patch('server.edhrec_candidates') as publisher:
+        with patch.dict(os.environ, {'MTG_OPENAI_API_KEY': 'test-only'}), patch('server.prime_cards'), patch('server.lookup_card', side_effect=fixture.cards.__getitem__), patch('libby.urllib.request.urlopen', return_value=response(fixture.draft)), patch('server.search_cards') as search, patch('server.edhrec_candidates') as publisher, patch('libby.review_claims', return_value={'supported': True, 'issues': []}):
             connection = http.client.HTTPConnection('127.0.0.1', self.http.server_port)
             connection.request('POST', '/api/chat', body=json.dumps({'message': QUESTION, 'context': {'deck': fixture.deck}}), headers={'Content-Type': 'application/json'})
             result = connection.getresponse()

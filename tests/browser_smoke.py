@@ -12,7 +12,7 @@ with sync_playwright() as p:
     page.on('pageerror', lambda error: errors.append(str(error)))
     def chat(route):
         chat_calls.append(route.request.post_data_json)
-        route.fulfill(json={'answer': 'Let’s talk about your ramp.', 'sources': [{'title': 'EDHREC strategy', 'url': 'https://edhrec.com/articles'}]})
+        route.fulfill(json={'answer': 'Let’s talk about your ramp.', 'sources': [{'title': 'EDHREC strategy', 'url': 'https://edhrec.com/articles'}], 'card_evidence': [{'name': 'Reaper from the Abyss', 'color_identity': ['B'], 'mana_cost': '{3}{B}{B}{B}', 'type_line': 'Creature — Demon', 'power': '6', 'toughness': '6', 'oracle_text': 'At the beginning of each end step, if a creature died this turn, destroy target non-Demon creature.'}]})
     page.route('**/api/chat', chat)
     page.goto(BASE)
     expect(page.locator('.libby-spirit')).to_have_js_property('complete', True)
@@ -73,6 +73,8 @@ with sync_playwright() as p:
     page.locator('#chat-form button').click()
     expect(page.locator('#messages')).to_contain_text('Let’s talk about your ramp.')
     expect(page.locator('#messages a[href="https://edhrec.com/articles"]')).to_be_visible()
+    page.locator('.card-reference summary').click()
+    expect(page.locator('.card-reference')).to_contain_text('each end step')
     assert 'coverData' not in chat_calls[-1]['context']['deck']
     page.screenshot(path='/tmp/vibes-libby.png', full_page=True)
     for width, height in [(1440, 900), (1366, 768), (390, 844)]:
