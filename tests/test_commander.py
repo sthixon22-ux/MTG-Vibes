@@ -67,6 +67,11 @@ class CommanderTests(unittest.TestCase):
         del self.cards['Leader']
         self.assertIn('Leader', self.check()['unknown_cards'])
 
+    def test_commander_lookup_outage_does_not_claim_commander_is_missing(self):
+        check, _ = check_deck(self.deck, lambda name: (_ for _ in ()).throw(OSError('source unavailable')))
+        self.assertFalse(check['identity_verified'])
+        self.assertFalse(any('Include Leader' in issue for issue in check['issues']))
+
     def test_current_legendary_vehicle_and_spacecraft_eligibility(self):
         self.assertTrue(eligible(card('Vehicle', types='Legendary Artifact — Vehicle')))
         self.assertTrue(eligible(card('Spacecraft', types='Legendary Artifact — Spacecraft', power='4', toughness='4')))

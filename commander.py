@@ -134,8 +134,10 @@ def check_deck(deck, lookup):
         cards_by_name[key] = card
     present = {c.get('oracle_id') or c.get('name', n).casefold() for n, c in resolved.items() if n in {e['name'].casefold() for e in deck['cards']}}
     for name, card in zip(names, commanders):
+        if any(e['name'].strip().casefold() == name.strip().casefold() for e in deck['cards']):
+            continue
         key = (card.get('oracle_id') or card.get('name', name).casefold()) if card else None
-        if key not in present:
+        if card is not None and not unknown and key not in present:
             issues.append(f'Include {name} in the imported 100-card list.')
     check = {'color_identity': [c for c in 'WUBRG' if c in colors], 'identity_verified': verified}
     for key, card in cards_by_name.items():

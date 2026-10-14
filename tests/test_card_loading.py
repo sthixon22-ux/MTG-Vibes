@@ -11,7 +11,8 @@ class CardLoadingTests(unittest.TestCase):
     def setUp(self):
         server.CACHE.clear()
         server.CACHE_TIMES.clear()
-        server.SCRYFALL_UNAVAILABLE_UNTIL = 0
+        server.SCRYFALL_COOLDOWNS.clear()
+        server.SCRYFALL_LAST_ERROR = None
 
     def test_collection_fills_aliases_and_normalizes_apostrophes(self):
         cards = [{'name': "Mishra's Bauble"}, {'name': 'Slicer, Hired Muscle // Slicer, High-Speed Antagonist', 'card_faces': [{'name': 'Slicer, Hired Muscle'}, {'name': 'Slicer, High-Speed Antagonist'}]}]
@@ -74,7 +75,6 @@ class CardLoadingTests(unittest.TestCase):
             with self.assertRaises(urllib.error.URLError): server.lookup_card('Memnarch')
             with self.assertRaises(urllib.error.URLError): server.lookup_card('Victimize')
         self.assertEqual(upstream.call_count, 3)
-        server.SCRYFALL_UNAVAILABLE_UNTIL = 0
 
     def test_real_not_found_does_not_retry_or_block_other_cards(self):
         error = urllib.error.HTTPError('https://api.scryfall.com', 404, 'not found', {}, None)
@@ -88,3 +88,17 @@ class CardLoadingTests(unittest.TestCase):
         with patch('server.urllib.request.urlopen', side_effect=[error, io.BytesIO(b'\xff\xd8image')]) as upstream, patch('server.time.sleep'):
             self.assertEqual(server.download_card_image('https://cards.scryfall.io/card.jpg'), b'\xff\xd8image')
         self.assertEqual(upstream.call_count, 2)
+
+    def test_rejected_collection_request_does_not_block_named_get(self):
+        error = urllib.error.HTTPError('https://api.scryfall.com/cards/collection',403,'rejected',{},None)
+        with patch('server.urllib.request.urlopen',side_effect=[error,io.BytesIO(json.dumps({'name': 'Eshki, Temur\'s Roar'}).encode())]) as upstream:
+            server.prime_cards({'cards':[{'name': "Eshki, Temur's Roar"}]})
+            self.assertEqual(server.lookup_card("Eshki, Temur's Roar")['name'], "Eshki, Temur's Roar")
+        self.assertEqual(upstream.call_count,2)
+
+    def test_post_outage_cooldown_is_isolated_from_named_get(self):
+        error = urllib.error.HTTPError('https://api.scryfall.com/cards/collection',503,'unavailable',{},None)
+        with patch('server.urllib.request.urlopen',side_effect=[error,error,error,io.BytesIO(json.dumps({'name':'Aetherize'}).encode())]) as upstream,patch('server.time.sleep'):
+            server.prime_cards({'cards':[{'name':'Aetherize'}]})
+            self.assertEqual(server.lookup_card('Aetherize')['name'],'Aetherize')
+        self.assertEqual(upstream.call_count,4)

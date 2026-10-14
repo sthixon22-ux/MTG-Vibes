@@ -35,7 +35,15 @@ IMAGE_DOWNLOAD_LOCKS = {}
 SCRYFALL_NETWORK_LOCK = Lock()
 BATCH_LOCK = Lock()
 CARD_LOOKUP_LOCKS = {}
-SCRYFALL_UNAVAILABLE_UNTIL = 0.0
+SCRYFALL_COOLDOWNS = {}
+SCRYFALL_LAST_ERROR = None
+SCRYFALL_ERRORS = {}
+
+
+class ScryfallUnavailable(urllib.error.URLError):
+    def __init__(self, source_error):
+        super().__init__('Scryfall is temporarily unavailable; retry shortly.')
+        self.source_error = dict(source_error)
 
 
 def card_name(name):
@@ -65,10 +73,11 @@ def cache_card(card, requested=None):
 
 def scryfall_json(request):
     """Share pacing/retries across named, collection and search endpoints."""
-    global LAST_REQUEST, SCRYFALL_UNAVAILABLE_UNTIL
+    global LAST_REQUEST, SCRYFALL_LAST_ERROR
+    endpoint = request.get_method() + ' ' + urllib.parse.urlsplit(request.full_url).path
     with SCRYFALL_NETWORK_LOCK:
-        if time.monotonic() < SCRYFALL_UNAVAILABLE_UNTIL:
-            raise urllib.error.URLError('Scryfall is temporarily unavailable; retry shortly.')
+        if time.monotonic() < SCRYFALL_COOLDOWNS.get(endpoint, 0):
+            raise ScryfallUnavailable(SCRYFALL_ERRORS.get(endpoint, {'endpoint': endpoint, 'http_status': None}))
         for attempt in range(3):
             time.sleep(max(0, 0.12 - (time.monotonic() - LAST_REQUEST)))
             LAST_REQUEST = time.monotonic()
@@ -76,20 +85,24 @@ def scryfall_json(request):
                 with urllib.request.urlopen(request, timeout=8) as response:
                     return json.load(response)
             except urllib.error.HTTPError as error:
+                SCRYFALL_LAST_ERROR = {'endpoint': endpoint, 'http_status': error.code}
+                SCRYFALL_ERRORS[endpoint] = SCRYFALL_LAST_ERROR
                 if error.code not in (429, 500, 502, 503, 504):
                     if error.code == 403:
-                        SCRYFALL_UNAVAILABLE_UNTIL = time.monotonic() + 10
+                        SCRYFALL_COOLDOWNS[endpoint] = time.monotonic() + 10
                     raise
                 retry_after = error.headers.get('Retry-After', '') if error.headers else ''
                 delay = min(2, float(retry_after)) if retry_after.replace('.', '', 1).isdigit() else 0.4 * (attempt + 1)
             except (urllib.error.URLError, TimeoutError, OSError):
+                SCRYFALL_LAST_ERROR = {'endpoint': endpoint, 'http_status': None, 'reason': 'Connection or timeout failure'}
+                SCRYFALL_ERRORS[endpoint] = SCRYFALL_LAST_ERROR
                 delay = 0.4 * (attempt + 1)
                 if attempt == 2:
-                    SCRYFALL_UNAVAILABLE_UNTIL = time.monotonic() + 10
-                    raise
+                    SCRYFALL_COOLDOWNS[endpoint] = time.monotonic() + 10
+                    raise ScryfallUnavailable(SCRYFALL_LAST_ERROR)
             if attempt == 2:
-                SCRYFALL_UNAVAILABLE_UNTIL = time.monotonic() + 10
-                raise urllib.error.URLError('Scryfall remains temporarily unavailable after retries.')
+                SCRYFALL_COOLDOWNS[endpoint] = time.monotonic() + 10
+                raise ScryfallUnavailable(SCRYFALL_LAST_ERROR)
             time.sleep(delay)
 
 
@@ -126,6 +139,23 @@ def prime_cards(deck):
                     cache_card(card)
             except (urllib.error.URLError, ValueError, TimeoutError, KeyError):
                 break
+
+
+def deck_data_snapshot(deck):
+    from analytics import validate_deck
+    validate_deck(deck)
+    prime_cards(deck)
+    requested = list(dict.fromkeys([e['name'] for e in deck['cards']] + [deck.get(k, '') for k in ('commander', 'partner') if deck.get(k)]))
+    resolved, failures = {}, []
+    for name in requested:
+        try:
+            resolved[card_name(name).casefold()] = lookup_card(name)
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                failures.append({'http_status': error.code, 'endpoint': 'GET /cards/named'})
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as error:
+            failures.append(getattr(error, 'source_error', {'endpoint': 'GET /cards/named', 'http_status': None, 'reason': 'Scryfall connection failed'}))
+    return resolved, failures
 
 
 def search_cards(query, check):
@@ -219,10 +249,14 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(400, {'error': 'Enter a message up to 4000 characters.'})
             context = data.get('context', {})
             if self.path == '/api/deck-analysis':
-                prime_cards(data.get('deck', {}))
-                stats = summarize(data.get('deck', {}), lookup_card)
-                stats['commander_check'], _ = check_deck(data.get('deck', {}), lookup_card)
-                stats['card_data_status'] = 'temporarily_unavailable' if time.monotonic() < SCRYFALL_UNAVAILABLE_UNTIL else 'partial' if stats['unknown_cards'] else 'ready'
+                active = data.get('deck', {})
+                resolved, failures = deck_data_snapshot(active)
+                if failures:
+                    return self.send_json(503, {'error': 'Scryfall card data could not be loaded. The deck check could not finish; this is a connection failure, not a missing-card ruling.', 'code': 'scryfall_unavailable', 'source_error': failures[0]})
+                snapshot_lookup = lambda name: resolved[card_name(name).casefold()]
+                stats = summarize(active, snapshot_lookup)
+                stats['commander_check'], _ = check_deck(active, snapshot_lookup)
+                stats['card_data_status'] = 'partial' if stats['unknown_cards'] else 'ready'
                 return self.send_json(200, stats)
             if re.search(r'\b(odds|probability|how often|chance)\b', message, re.I) and (re.search(r'opening.hand odds', message, re.I) or (re.search(r'\b(3|three)\s+lands?\b', message, re.I) and re.search(r'\bspell', message, re.I))):
                 prime_cards(context.get('deck', {}))
@@ -272,11 +306,11 @@ class Handler(SimpleHTTPRequestHandler):
         global LAST_REQUEST
         parsed = urllib.parse.urlsplit(self.path)
         if parsed.path == '/healthz':
-            return self.send_json(200, {'ok': True})
+            return self.send_json(200, {'ok': True, 'revision': os.environ.get('RENDER_GIT_COMMIT', 'local')})
         if not self.authorized():
             return
         if parsed.path == '/api/health':
-            return self.send_json(200, {'ok': True, 'ai_configured': bool(os.environ.get('MTG_OPENAI_API_KEY')), 'model': os.environ.get('MTG_OPENAI_MODEL', 'gpt-5.4')})
+            return self.send_json(200, {'ok': True, 'ai_configured': bool(os.environ.get('MTG_OPENAI_API_KEY')), 'model': os.environ.get('MTG_OPENAI_MODEL', 'gpt-5.4'), 'scryfall_last_error': SCRYFALL_LAST_ERROR})
         if parsed.path == '/api/card-image':
             params = urllib.parse.parse_qs(parsed.query)
             name = params.get('name', [''])[0].strip()

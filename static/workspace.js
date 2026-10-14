@@ -5,7 +5,11 @@ async function loadDeckData(current,force=false){
  const cached=deckDataLoads.get(current);if(cached?.pending)return cached.pending;if(cached?.result&&!force)return cached.result;
  const state={};state.pending=(async()=>{
   const response=await fetch('/api/deck-analysis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({deck:{cards:current.cards,commander:current.commander,partner:current.partner || ''}})});
-  const result=await response.json();if(!response.ok)throw new Error(result.error || 'Could not load card data.');
+  const result=await response.json();if(!response.ok){
+   if(current.commanderCheck?.unknown_cards?.length || current.statistics?.unknown_cards?.length){current.commanderCheck=null;current.statistics=null;if(deck===current){saveLibrary();renderCommanderCheck();}}
+   const source=result.source_error;const diagnostic=source?.http_status?' (Scryfall '+source.endpoint+': HTTP '+source.http_status+')':'';
+   throw new Error((result.error || 'Could not load card data.')+diagnostic);
+  }
   current.statistics=result;current.commanderCheck=result.commander_check;state.result=result;
   if(deck===current){saveLibrary();renderCommanderCheck();$('#analysis-status').textContent=result.card_data_status==='temporarily_unavailable'?'Scryfall is temporarily unavailable. Use Refresh card data to retry.':result.unknown_cards.length?'Some card details could not be loaded. Use Refresh card data to retry.':'Card data refreshed. Opening-hand odds use exact probabilities.';}
   return result;
@@ -54,7 +58,7 @@ async function renderDeckBrowser(){
  document.querySelectorAll('[data-view]').forEach(button=>{button.classList.toggle('selected',button.dataset.view===deckView);button.setAttribute('aria-pressed',String(button.dataset.view===deckView));});
  if(deckView==='stats'){renderStatistics(browser);return;}
  if(!deckDataLoads.get(current)?.result)$('#analysis-status').textContent='Loading deck card data…';
- try{await loadDeckData(current);}catch(error){if(deck===current)$('#analysis-status').textContent=error.message || 'Could not load card data. Use Refresh card data to retry.';}
+ loadDeckData(current).catch(error=>{if(deck===current)$('#analysis-status').textContent=error.message || 'Could not load card data. Use Refresh card data to retry.';});
  if(deck!==current||epoch!==deckRenderEpoch)return;
  const filter=$('#deck-filter').value.toLowerCase();const cards=deck.cards.filter(c=>c.name.toLowerCase().includes(filter));browser.className='deck-browser '+(deckView==='images'?'image-grid':'text-list');
  cards.forEach(card=>{

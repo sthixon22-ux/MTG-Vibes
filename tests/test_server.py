@@ -49,6 +49,16 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(json.loads(body)['ok'])
 
+    def test_analysis_connection_failure_is_not_a_missing_card_report(self):
+        deck={'commander':'Eshki, Temur\'s Roar','cards':[{'name':'Eshki, Temur\'s Roar','quantity':1},{'name':'Forest','quantity':99}]}
+        with patch('server.prime_cards'),patch('server.lookup_card',side_effect=urllib.error.URLError('source unavailable')):
+            status, body=self.request('/api/deck-analysis',{'deck':deck})
+        result=json.loads(body)
+        self.assertEqual(status,503)
+        self.assertEqual(result['code'],'scryfall_unavailable')
+        self.assertNotIn('commander_check',result)
+        self.assertNotIn('unknown_cards',result)
+
     def test_missing_key_does_not_call_provider(self):
         with patch.dict(os.environ, {'MTG_OPENAI_API_KEY': ''}):
             status, body = self.request('/api/chat', {'message': 'Help'})
