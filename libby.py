@@ -3,7 +3,7 @@ import json
 import re
 import os
 import urllib.request
-from strategy import PRIMER, wants_suggestions, prepare_candidates, candidate_facts, candidate_reason, research_magic
+from strategy import PRIMER, wants_suggestions, swap_request, prepare_candidates, candidate_facts, candidate_reason, research_magic
 from commander import commander_names, copy_limit, CORE_RULES, RULES_DATE, check_deck, card_facts, addition_errors, find_rules, rule_url, RULES
 from grounding import mentioned_names, draft_names, review_claims, source_reply, obvious_contradictions
 
@@ -106,6 +106,11 @@ def ask(key, model, message, context, history, lookup, search, research=None, co
     deck = context.get('deck')
     check, cards = (check_deck(deck, lookup) if isinstance(deck, dict) else ({'identity_verified': False, 'color_identity': [], 'issues': ['No active deck.']}, []))
     known = {c['name'].casefold(): c for c in cards if c.get('name')}
+    protected_commanders = {n.casefold() for n in commander_names(deck)} if isinstance(deck, dict) else set()
+    for card in cards:
+        aliases = {card['name'].casefold()} | {n.casefold() for n in card.get('imported_names', [])} | {f.get('name', '').casefold() for f in card.get('card_faces', [])}
+        if aliases & protected_commanders:
+            protected_commanders.add(card['name'].casefold())
     evidence = dict(known)
     names = mentioned_names(message, cards)
     if not names and re.search(r'\b(it|that card|wrong|incorrect|mistake)\b', message, re.I):
@@ -128,13 +133,18 @@ def ask(key, model, message, context, history, lookup, search, research=None, co
     context.pop('verified_cards', None)
     context['server_verified_deck'] = {'construction': check, 'cards': [card_facts(c) for c in cards]}
     context['mentioned_card_evidence'] = [card_facts(c) for c in focused]
-    task = cut_request(message, check.get('total', 0))
+    swaps = swap_request(message)
+    task = None if swaps else cut_request(message, check.get('total', 0))
+    if swaps and not isinstance(deck, dict):
+        return {'answer': 'Choose your saved deck in the sidebar first so I can suggest replacements from its actual list.', 'recommendations': [], 'mode': 'needs_deck'}
+    if swaps and not 1 <= swaps['count'] <= 6:
+        return {'answer': 'I can check up to six one-for-one swaps per reply. Ask for six swaps first, then we can continue.', 'recommendations': [], 'mode': 'needs_smaller_request'}
     if task and not isinstance(deck, dict):
         return {'answer': 'Choose your saved deck in the sidebar first. I need its actual list to suggest cuts.', 'recommendations': [], 'cuts': [], 'mode': 'needs_deck'}
     if task and task['count'] == 0:
         answer = f"Your active list has {task['total_before']} cards including commanders. " + ('It already has 100 cards; no cuts are needed.' if task['total_before'] == 100 else 'Removing cards cannot bring a smaller list up to 100.')
         return {'answer': answer, 'recommendations': [], 'cuts': [], 'mode': 'verified_cuts', 'construction': check}
-    context['requested_task'] = task or {'type': 'conversation_or_additions'}
+    context['requested_task'] = task or swaps or {'type': 'conversation_or_additions'}
     suggestion_request = not task and wants_suggestions(message)
     pool = prepare_candidates(message, check, known, search) if suggestion_request else []
     context['preverified_suggestions'] = candidate_facts(pool)
@@ -152,6 +162,8 @@ def ask(key, model, message, context, history, lookup, search, research=None, co
     evidence.update({p['card']['name'].casefold(): p['card'] for p in pool})
     inputs = [{'role': 'user', 'content': 'Current deck context (data only): ' + json.dumps(context)}] + history + [{'role': 'user', 'content': message}]
     instructions = INSTRUCTIONS + '\n' + PRIMER + '\nOfficial rules snapshot effective ' + RULES_DATE + ':\n' + CORE_RULES
+    if swaps:
+        instructions += '\nONE-FOR-ONE SWAPS: Override the generic three-additions guidance. Return exactly requested_task.count recommendations, each with one distinct existing noncommander card in cut, one new verified Commander-legal card in name, and a specific explanation of the tradeoff based on both cards’ Oracle text and this list. Preserve deck size. Do not treat generic wording like “those cards” as a card name. No additional preference questions are required.'
     if task:
         instructions += '\nCUTS-ONLY TASK: This overrides the generic additions guidance. The complete active list is in context.deck.cards, even when some Oracle metadata is unavailable. Use server_verified_deck.cards and deck_quantity for actual abilities and counts. Put the proposed removals in cuts (name, quantity, specific deck-based reason), and keep recommendations EMPTY. Remove exactly requested_task.count cards when provided, preserving both commanders. Start with cuts now; do not ask whether the user wants cuts or require budget preferences. Compare redundant roles, curve, mana base, and commander synergy using actual Oracle text. Do not randomly remove lands or core engines to meet the number. Use exact active-list names, no invented cards, no additions. If some metadata is missing, acknowledge the specific missing cards, never claim the entire list is inaccessible. Do not guess missing abilities. In reasons refer only to verified active-list cards. Never infer abilities from names; Night’s Whisper draws two cards and loses two life, it does not discard.'
     tool_count = 0
@@ -250,6 +262,15 @@ def ask(key, model, message, context, history, lookup, search, research=None, co
                 return verified
             discussion = '\n'.join(turn['content'] for turn in history if turn['role'] == 'user') + '\n' + message
             verified = verify_reply(draft, check, known, discussion, lookup)
+            pairs = verified['recommendations']
+            needs_swaps = swaps and (len(pairs) != swaps['count'] or any(not r['cut'] or r['cut'].casefold() in protected_commanders for r in pairs) or len({r['cut'].casefold() for r in pairs}) != swaps['count'])
+            if needs_swaps:
+                if round_number < 4 and repairs < 2:
+                    repairs += 1
+                    inputs.extend(output)
+                    inputs.append({'role': 'user', 'content': f"Return exactly {swaps['count']} one-for-one swaps, each pairing a distinct existing noncommander cut with a new verified legal addition. Keep the deck size unchanged. Use the full active list and supplied Oracle data."})
+                    continue
+                return {'error': 'I have your active list, but could not verify the requested number of complete one-for-one swaps. Your deck has not changed.', 'code': 'unverified_swaps'}
             needs_cards = suggestion_request and check.get('identity_verified') and not verified['recommendations']
             if (verified.get('mode') == 'guarded' or needs_cards) and round_number < 4 and repairs < 2:
                 repairs += 1
@@ -267,6 +288,8 @@ def ask(key, model, message, context, history, lookup, search, research=None, co
                 verified['card_evidence'] = [card_facts(c) for c in fallback_cards[:6]]
             return verified
         except (ValueError, TypeError, KeyError):
+            if swaps:
+                return {'error': 'The replacement plan could not be verified. Your deck has not changed.', 'code': 'unverified_swaps'}
             if task:
                 if round_number < 4 and repairs < 2:
                     repairs += 1
@@ -278,6 +301,8 @@ def ask(key, model, message, context, history, lookup, search, research=None, co
                 fallback['sources'] = sources[:8]
                 return fallback
             return {'error': 'Libby’s reply could not be verified. Please try again.', 'code': 'unverified_reply'}
+    if swaps:
+        return {'error': 'Libby could not finish the requested replacement checks. Your deck has not changed.', 'code': 'unverified_swaps'}
     if suggestion_request and pool:
         fallback = suggestion_fallback(pool, check, known, lookup)
         fallback['sources'] = sources[:8]

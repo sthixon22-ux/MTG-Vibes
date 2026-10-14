@@ -31,7 +31,15 @@ ROLE_WORDS = {'ramp': r'ramp|mana rocks?|dorks?|fixing|acceleration', 'draw': r'
 def wants_suggestions(message):
     if re.search(r"\b(don[’']?t|do not|no)\s+(suggest|recommend|suggestions|recommendations)\b", message, re.I):
         return False
-    return bool(re.search(r'\b(suggest\w*|recommend\w*|improv\w*|upgrad\w*|add|swap\w*|alternatives?|deck advice|better options|cuts?)\b', message, re.I))
+    return bool(re.search(r'\b(suggest\w*|recommend\w*|improv\w*|upgrad\w*|add|swap\w*|replac\w*|change|alternatives?|deck advice|better options|cuts?)\b', message, re.I))
+
+
+def swap_request(message):
+    count = re.search(r'\b(?:change|swap|replace|switch)\s+(\d+|one|two|three|four|five|six)\s+cards?\b', message, re.I)
+    if not count:
+        return None
+    numbers = {'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6}
+    return {'type': 'swaps', 'count': int(count[1]) if count[1].isdigit() else numbers[count[1].lower()]}
 
 
 def requested_roles(message):

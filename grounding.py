@@ -10,13 +10,13 @@ def mentioned_names(message, cards):
     if re.search(r'\b(card|would|good|include|add|evaluate|does|about|work)\b', message, re.I):
         names += re.findall(r'["“]([^"”\n]{2,200})["”]', message)
         names += re.findall(r"(?<!\w)'([^'\n]{2,200})'(?!\w)", message)
-    patterns = [r'\b(?:card called|card named|evaluate|tell me about|what does|how does|would|is)\s+["“]?(.{2,200}?)(?=\s+(?:be good|good|work|do|fit|in my|in this|for my|for this)|[?\n]|$)',
-                r'\b(?:card called|card named)\s+(.{2,200}?)(?=\s+(?:be good|good|work|do|fit|in my|in this|for my|for this)|[?\n]|$)']
+    patterns = [r'\b(?:card called|card named|evaluate|tell me about|what does|how does)\s+["“]?(.{2,200}?)(?=\s+(?:be good|good|work|do|fit|in my|in this|for my|for this)|[?\n]|$)',
+                r'\b(?:would|is)\s+["“]?(.{2,200}?)(?=\s+(?:be good|good|work|fit|in my|in this|for my|for this)\b)']
     for pattern in patterns:
         for name in re.findall(pattern, message, re.I):
             name = name.strip(" '“”\".,")
             # General questions aren't named-card requests.
-            if name and not re.search(r'\b(my|your|this|that|it|commander|deck|rules|the card|there|better|I|you)\b', name, re.I):
+            if name and not re.search(r'\b(my|your|this|that|these|those|it|they|them|what|which|why|how|cards?|commander|deck|rules|there|better|I|you|ramp|mean|means|available|opening hands?)\b|\d', name, re.I):
                 names.append(name)
     return list(dict.fromkeys(n.strip() for n in names if n.strip()))[:12]
 
