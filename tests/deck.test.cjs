@@ -5,10 +5,11 @@ const elements = new Map();
 function element() { return {value:'',children:[],classList:{toggle(){}},append(...items){this.children.push(...items)},replaceChildren(...items){this.children=items}}; }
 const context = vm.createContext({
   document: {querySelector(s){ if(!elements.has(s)) elements.set(s,element()); return elements.get(s); },querySelectorAll(){return []},createElement:element},
-  localStorage:{getItem(){return null}}, crypto:globalThis.crypto, Uint32Array,
+  localStorage:{getItem(){return null}}, crypto:globalThis.crypto, Uint32Array, TextEncoder,
   fetch:async()=>({json:async()=>({ai_configured:false})}), console,
 });
 vm.runInContext(fs.readFileSync('static/app.js','utf8'),context);
+vm.runInContext(`conversation=Array.from({length:20},()=>({role:'assistant',content:'界'.repeat(4000)}));if(new TextEncoder().encode(JSON.stringify(chatHistory())).length>32000)throw new Error('History byte budget exceeded');conversation=[];`,context);
 vm.runInContext(String.raw`
   const parsed = parseList('Commander\n1 Test Commander\nDeck\n1 Sol Ring (CMM) 396\n98 Forest\nSideboard\n1 Mountain');
   if (parsed.length !== 3 || parsed[1].name !== 'Sol Ring') throw new Error('Export parsing failed');

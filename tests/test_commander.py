@@ -124,7 +124,7 @@ class CommanderTests(unittest.TestCase):
         self.cards['Blue Card'] = card('Blue Card', 'U')
         reply = verify_reply({'answer': '[[Blue Card]] has blue identity; it is illegal here.', 'recommendations': [{'name': 'New Card', 'reason': 'An optional improvement.', 'cut': 'Rock'}]}, self.check(), {'rock': self.cards['Rock']}, 'Why is Blue Card illegal?', self.cards.__getitem__)
         self.assertEqual(reply['recommendations'][0]['name'], 'New Card')
-        self.assertIn('Checked additions', reply['answer'])
+        self.assertIn('Suggested swaps', reply['answer'])
 
     def test_tool_loop_supplies_verified_data_and_rules(self):
         outputs = [

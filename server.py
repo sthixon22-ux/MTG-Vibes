@@ -176,7 +176,7 @@ class Handler(SimpleHTTPRequestHandler):
             active = context.get('deck') if isinstance(context, dict) else None
             if isinstance(active, dict):
                 prime_cards(active)
-            result = ask(key, os.environ.get('MTG_OPENAI_MODEL', 'gpt-4.1-mini'), message, context, history, lookup_card, search_cards, commander_recs=lambda check, known: edhrec_candidates(check, known, lookup_card, message))
+            result = ask(key, os.environ.get('MTG_OPENAI_MODEL', 'gpt-5.4'), message, context, history, lookup_card, search_cards, commander_recs=lambda check, known: edhrec_candidates(check, known, lookup_card, message))
             return self.send_json(502 if result.get('error') else 200, result)
         except (ValueError, TypeError, AttributeError):
             return self.send_json(400, {'error': 'Invalid request.'})
@@ -209,7 +209,7 @@ class Handler(SimpleHTTPRequestHandler):
         if not self.authorized():
             return
         if parsed.path == '/api/health':
-            return self.send_json(200, {'ok': True, 'ai_configured': bool(os.environ.get('MTG_OPENAI_API_KEY'))})
+            return self.send_json(200, {'ok': True, 'ai_configured': bool(os.environ.get('MTG_OPENAI_API_KEY')), 'model': os.environ.get('MTG_OPENAI_MODEL', 'gpt-5.4')})
         if parsed.path == '/api/card-image':
             params = urllib.parse.parse_qs(parsed.query)
             name = params.get('name', [''])[0].strip()

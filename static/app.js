@@ -1,7 +1,7 @@
 const $ = s => document.querySelector(s);
 let deck = null, library = [], hand = [], mulligans = 0, bottomNeeded = 0, metadata = {}, playStarted = false;
 let savedDecks = [], editingId = null;
-let conversation = [], chatBusy = false, chatEpoch = 0;
+let conversation = [], conversationState = {}, chatBusy = false, chatEpoch = 0;
 const cardCache = new Map(), cardPending = new Map();
 function moxfieldUrl(value) {
   if (!value?.trim()) return '';
@@ -17,17 +17,27 @@ function updateSourceLinks() {
   }
 }
 function resetConversation(clear=true) {
-  conversation = []; chatEpoch++;
-  if(clear && typeof sessionStorage!=='undefined') try {sessionStorage.removeItem('libby-chat-'+(deck?.id || 'general'));}catch{}
+  conversation = []; conversationState = {}; chatEpoch++;
+  if(clear && typeof sessionStorage!=='undefined') try {sessionStorage.removeItem('libby-chat-'+(deck?.id || 'general'));sessionStorage.removeItem('libby-state-'+(deck?.id || 'general'));}catch{}
   $('#messages').replaceChildren(make('div',deck ? `Let’s talk about ${deck.name}. Ask about strategy, card swaps, or your next opening hand.` : 'Add a deck, then ask me about its strategy, card choices, or opening hands.','message'));
   $('#chat-context').textContent = deck ? `Talking about ${deck.name}` : 'Add a deck to give AI your list';
 }
 function restoreConversation() {
   resetConversation(false);
   if(typeof sessionStorage==='undefined')return;
+  try {const state=JSON.parse(sessionStorage.getItem('libby-state-'+(deck?.id || 'general')) || '{}');if(state && typeof state==='object' && !Array.isArray(state))conversationState=state;}catch{}
   try {const saved=JSON.parse(sessionStorage.getItem('libby-chat-'+(deck?.id || 'general')) || '[]'); if(Array.isArray(saved)) conversation=saved.filter(t=>['user','assistant'].includes(t?.role)&&typeof t.content==='string'&&t.content.length<=8000).slice(-20); conversation.forEach(t=>message(t.content,t.role==='user'));}catch{}
 }
-function storeConversation(){if(typeof sessionStorage!=='undefined')try{sessionStorage.setItem('libby-chat-'+(deck?.id || 'general'),JSON.stringify(conversation));}catch{}}
+function storeConversation(){if(typeof sessionStorage!=='undefined')try{sessionStorage.setItem('libby-chat-'+(deck?.id || 'general'),JSON.stringify(conversation));sessionStorage.setItem('libby-state-'+(deck?.id || 'general'),JSON.stringify(conversationState));}catch{}}
+function chatHistory(){
+  const recent=[];let bytes=0;
+  for(const turn of conversation.slice(-20).reverse()){
+    const size=new TextEncoder().encode(JSON.stringify(turn)).length;
+    if(bytes+size>32000)break;
+    recent.unshift(turn);bytes+=size;
+  }
+  return recent;
+}
 $('#clear-chat').onclick = () => resetConversation();
 const make = (tag, text, cls) => { const el = document.createElement(tag); el.textContent = text; if (cls) el.className = cls; return el; };
 function tab(id) {
@@ -245,7 +255,7 @@ async function send(prompt) {
     chatBusy = true; const currentDeck=deck, currentEpoch=chatEpoch;
     const button = $('#chat-form button'); button.disabled = true;
     const thinking = make('div','Thinking about your deck…','message'); $('#messages').append(thinking);
-    try { const r = await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:prompt,history:conversation.slice(-10),context:deck ? {deck:{name:deck.name,commander:deck.commander,partner:deck.partner || '',cards:deck.cards,sourceUrl:deck.sourceUrl},analysis:analysisText(),current_hand:playStarted ? [...hand] : null,game:typeof gameContext==='function'?gameContext():null,verified_cards:deck.cards.filter(c=>metadata[c.name] || cardCache.has(c.name)).map(c=>{const m=metadata[c.name] || cardCache.get(c.name); return {name:m.name,type_line:m.type_line,mana_value:m.cmc,color_identity:m.color_identity};})} : {}})}); const data = await r.json(); if(deck!==currentDeck || chatEpoch!==currentEpoch) return; message(data.answer || data.error); if(!r.ok) $('.notice').textContent=data.error; if(r.ok && data.answer) {if(typeof libbyVoiceReply==='function')libbyVoiceReply(data.answer);if(data.rule_references){const refs=make('div','','rule-references');data.rule_references.forEach(ref=>{const a=make('a',ref.number+' ↗');a.href=ref.url;a.target='_blank';a.rel='noopener noreferrer';refs.append(a);});$('#messages').lastChild.append(refs);}if(data.card_evidence?.length && data.mode!=='source_only'){const details=make('details','','card-reference');details.append(make('summary','Scryfall card reference'));data.card_evidence.forEach(card=>{const text=[card.name,card.mana_cost,card.type_line,'Color identity: '+((card.color_identity || []).join('') || 'colorless'),card.power && card.toughness ? card.power+'/'+card.toughness : '',card.oracle_text || (card.card_faces || []).map(face=>face.name+'\n'+(face.oracle_text || '')).join('\n\n')].filter(Boolean).join('\n');details.append(make('p',text));});$('#messages').lastChild.append(details);}if(data.sources?.length){const refs=make('div','','rule-references');data.sources.forEach(source=>{const a=make('a',source.title || 'Strategy source ↗');a.href=source.url;a.target='_blank';a.rel='noopener noreferrer';refs.append(a);});$('#messages').lastChild.append(refs);}if(deck && data.construction && typeof renderCommanderCheck==='function'){deck.commanderCheck=data.construction;saveLibrary();renderCommanderCheck();}conversation.push({role:'user',content:prompt},{'role':'assistant','content':data.answer.slice(0,8000)}); conversation=conversation.slice(-20);storeConversation();if(data.mode==='computed')$('.notice').textContent='Computed from Scryfall card data. AI chat may still require a working OpenAI connection.';} }
+    try { const r = await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:prompt,history:chatHistory(),context:deck ? {conversation_state:conversationState,deck:{name:deck.name,commander:deck.commander,partner:deck.partner || '',cards:deck.cards,sourceUrl:deck.sourceUrl},analysis:analysisText(),current_hand:playStarted ? [...hand] : null,game:typeof gameContext==='function'?gameContext():null} : {conversation_state:conversationState}})}); const data = await r.json(); if(deck!==currentDeck || chatEpoch!==currentEpoch) return; if(data.conversation_state){conversationState=data.conversation_state;storeConversation();}message(data.answer || data.error); if(!r.ok) $('.notice').textContent=data.error; if(r.ok && data.answer) {if(typeof libbyVoiceReply==='function')libbyVoiceReply(data.answer);if(data.rule_references){const refs=make('div','','rule-references');data.rule_references.forEach(ref=>{const a=make('a',ref.number+' ↗');a.href=ref.url;a.target='_blank';a.rel='noopener noreferrer';refs.append(a);});$('#messages').lastChild.append(refs);}if(data.card_evidence?.length){const details=make('details','','card-reference');details.append(make('summary','Scryfall card reference'));data.card_evidence.forEach(card=>{const text=[card.name,card.mana_cost,card.type_line,'Color identity: '+((card.color_identity || []).join('') || 'colorless'),card.power && card.toughness ? card.power+'/'+card.toughness : '',card.oracle_text || (card.card_faces || []).map(face=>face.name+'\n'+(face.oracle_text || '')).join('\n\n')].filter(Boolean).join('\n');details.append(make('p',text));});$('#messages').lastChild.append(details);}if(data.sources?.length){const refs=make('div','','rule-references');data.sources.forEach(source=>{const a=make('a',source.title || 'Strategy source ↗');a.href=source.url;a.target='_blank';a.rel='noopener noreferrer';refs.append(a);});$('#messages').lastChild.append(refs);}if(deck && data.construction && typeof renderCommanderCheck==='function'){deck.commanderCheck=data.construction;saveLibrary();renderCommanderCheck();}conversation.push({role:'user',content:prompt},{'role':'assistant','content':data.answer.slice(0,8000)}); conversation=conversation.slice(-20);storeConversation();if(data.mode==='computed')$('.notice').textContent='Computed from Scryfall card data. AI chat may still require a working OpenAI connection.';} }
     catch { message('The server could not be reached. Try again.'); }
     finally { thinking.remove(); button.disabled = false; chatBusy=false; $('#discuss-hand').disabled=!playStarted || bottomNeeded>0; }
   }
@@ -264,7 +274,7 @@ try {
     activateDeck(savedDecks.find(d=>d.id===saved.id)||savedDecks[0]);
   }
 } catch { /* Ignore invalid or unavailable browser storage. */ }
-fetch('/api/health').then(r=>r.json()).then(data=> { $('.notice').textContent=data.ai_configured ? 'Libby’s key is configured. Click Libby or ask a question below.' : 'Libby isn’t connected yet. Deck import, analysis, and playtesting are available.'; }).catch(()=>{ $('.notice').textContent='Connection unavailable. Refresh to reconnect.'; });
+fetch('/api/health').then(r=>r.json()).then(data=> { $('.notice').textContent=data.ai_configured ? `Libby is configured with ${data.model || 'OpenAI'}. Click Libby or ask a question below.` : 'Libby isn’t connected yet. Deck import, analysis, and playtesting are available.'; }).catch(()=>{ $('.notice').textContent='Connection unavailable. Refresh to reconnect.'; });
 renderLibrary();
 updateSourceLinks();
 renderHand();

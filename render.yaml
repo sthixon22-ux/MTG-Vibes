@@ -11,4 +11,4 @@ services:
       - key: MTG_OPENAI_API_KEY
         sync: false
       - key: MTG_OPENAI_MODEL
-        value: gpt-4.1-mini
+        value: gpt-5.4
