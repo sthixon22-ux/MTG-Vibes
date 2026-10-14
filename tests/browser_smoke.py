@@ -81,7 +81,7 @@ with sync_playwright() as p:
     expect(page.locator('#messages')).to_contain_text('Let’s talk about your ramp.')
     page.locator('#prompt').fill('Keep all lands and try again.')
     page.locator('#chat-form button').click()
-    page.wait_for_function('conversation.length>=4')
+    expect(page.locator('#messages .message').filter(has_text='Let’s talk about your ramp.')).to_have_count(2)
     assert chat_calls[-1]['context']['conversation_state']['preferences']['preserve_lands']
     assert chat_calls[-1]['context']['conversation_state']['task']['count']==5
     for width, height in [(1440, 900), (1366, 768), (390, 844)]:
@@ -103,7 +103,6 @@ with sync_playwright() as p:
     page.locator('#import-form button[type=submit]').click()
     page.locator('[data-tab=chat]').click()
     page.wait_for_url(BASE + '/')
-    page.locator('#libby-deck-check button').click()
     expect(page.locator('#libby-deck-check')).to_contain_text('White · Blue · Black · Green', timeout=60000)
     expect(page.locator('#libby-deck-check')).to_contain_text('Construction checks passed')
     page.locator('[data-tab=play]').click()

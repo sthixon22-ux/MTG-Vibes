@@ -32,45 +32,100 @@ IMAGE_LOCK = Lock()
 IMAGE_DOWNLOAD_LOCKS = {}
 
 
-def lookup_card(name):
-    global LAST_REQUEST
-    # Only metadata requests are serialized; image downloads have a separate lock.
+SCRYFALL_NETWORK_LOCK = Lock()
+BATCH_LOCK = Lock()
+CARD_LOOKUP_LOCKS = {}
+SCRYFALL_UNAVAILABLE_UNTIL = 0.0
+
+
+def card_name(name):
+    return ' '.join(name.strip().replace('’', "'").replace('‘', "'").split())
+
+
+def cached_card(name):
+    key = card_name(name).casefold()
     with LOCK:
-        key = name.casefold()
-        if key in CACHE and time.monotonic() - CACHE_TIMES.get(key, time.monotonic()) >= CARD_CACHE_SECONDS:
-            CACHE.pop(key, None)
-        if key not in CACHE:
+        if key in CACHE and time.monotonic() - CACHE_TIMES.get(key, time.monotonic()) < CARD_CACHE_SECONDS:
+            return CACHE[key]
+    return None
+
+
+def cache_card(card, requested=None):
+    if not isinstance(card, dict) or not isinstance(card.get('name'), str):
+        raise ValueError('Invalid Scryfall card response.')
+    names = [card['name']] + [f['name'] for f in card.get('card_faces', []) if f.get('name')]
+    if requested:
+        names.append(requested)
+    with LOCK:
+        for name in names:
+            key = card_name(name).casefold()
+            CACHE[key] = card
+            CACHE_TIMES[key] = time.monotonic()
+
+
+def scryfall_json(request):
+    """Share pacing/retries across named, collection and search endpoints."""
+    global LAST_REQUEST, SCRYFALL_UNAVAILABLE_UNTIL
+    with SCRYFALL_NETWORK_LOCK:
+        if time.monotonic() < SCRYFALL_UNAVAILABLE_UNTIL:
+            raise urllib.error.URLError('Scryfall is temporarily unavailable; retry shortly.')
+        for attempt in range(3):
             time.sleep(max(0, 0.12 - (time.monotonic() - LAST_REQUEST)))
             LAST_REQUEST = time.monotonic()
-            url = 'https://api.scryfall.com/cards/named?' + urllib.parse.urlencode({'exact': name})
-            request = urllib.request.Request(url, headers={'User-Agent': 'MTGVibes/0.2', 'Accept': 'application/json'})
-            with urllib.request.urlopen(request, timeout=15) as response:
-                CACHE[key] = json.load(response)
-                CACHE_TIMES[key] = time.monotonic()
-        return CACHE[key]
+            try:
+                with urllib.request.urlopen(request, timeout=8) as response:
+                    return json.load(response)
+            except urllib.error.HTTPError as error:
+                if error.code not in (429, 500, 502, 503, 504):
+                    if error.code == 403:
+                        SCRYFALL_UNAVAILABLE_UNTIL = time.monotonic() + 10
+                    raise
+                retry_after = error.headers.get('Retry-After', '') if error.headers else ''
+                delay = min(2, float(retry_after)) if retry_after.replace('.', '', 1).isdigit() else 0.4 * (attempt + 1)
+            except (urllib.error.URLError, TimeoutError, OSError):
+                delay = 0.4 * (attempt + 1)
+                if attempt == 2:
+                    SCRYFALL_UNAVAILABLE_UNTIL = time.monotonic() + 10
+                    raise
+            if attempt == 2:
+                SCRYFALL_UNAVAILABLE_UNTIL = time.monotonic() + 10
+                raise urllib.error.URLError('Scryfall remains temporarily unavailable after retries.')
+            time.sleep(delay)
+
+
+def lookup_card(name):
+    name = card_name(name)
+    card = cached_card(name)
+    if card:
+        return card
+    with LOCK:
+        request_lock = CARD_LOOKUP_LOCKS.setdefault(name.casefold(), Lock())
+    with request_lock:
+        card = cached_card(name)
+        if card:
+            return card
+        url = 'https://api.scryfall.com/cards/named?' + urllib.parse.urlencode({'exact': name})
+        request = urllib.request.Request(url, headers={'User-Agent': 'MTGVibes/0.7', 'Accept': 'application/json'})
+        card = scryfall_json(request)
+        cache_card(card, name)
+        return card
 
 
 def prime_cards(deck):
     entries = deck.get('cards', []) if isinstance(deck, dict) else []
     if not isinstance(entries, list) or len(entries) > 250:
         return
-    names = [c['name'] for c in entries if isinstance(c, dict) and isinstance(c.get('name'), str) and 0 < len(c['name']) <= 200 and (c['name'].casefold() not in CACHE or time.monotonic() - CACHE_TIMES.get(c['name'].casefold(), time.monotonic()) >= CARD_CACHE_SECONDS)]
-    for offset in range(0, len(names), 75):
-        identifiers = [{'name': name} for name in names[offset:offset + 75]]
-        try:
-            request = urllib.request.Request('https://api.scryfall.com/cards/collection', data=json.dumps({'identifiers': identifiers}).encode(), headers={'User-Agent': 'MTGVibes/0.3', 'Content-Type': 'application/json', 'Accept': 'application/json'}, method='POST')
-            with urllib.request.urlopen(request, timeout=20) as response:
-                result = json.load(response)
-            with LOCK:
+    with BATCH_LOCK:
+        names = list(dict.fromkeys(card_name(c['name']) for c in entries if isinstance(c, dict) and isinstance(c.get('name'), str) and 0 < len(c['name']) <= 200 and not cached_card(c['name'])))
+        for offset in range(0, len(names), 75):
+            identifiers = [{'name': name} for name in names[offset:offset + 75]]
+            try:
+                request = urllib.request.Request('https://api.scryfall.com/cards/collection', data=json.dumps({'identifiers': identifiers}).encode(), headers={'User-Agent': 'MTGVibes/0.7', 'Content-Type': 'application/json', 'Accept': 'application/json'}, method='POST')
+                result = scryfall_json(request)
                 for card in result.get('data', []):
-                    CACHE[card['name'].casefold()] = card
-                    CACHE_TIMES[card['name'].casefold()] = time.monotonic()
-                    for face in card.get('card_faces', []):
-                        CACHE[face['name'].casefold()] = card
-                        CACHE_TIMES[face['name'].casefold()] = time.monotonic()
-            time.sleep(0.12)
-        except (urllib.error.URLError, ValueError, TimeoutError, KeyError):
-            break
+                    cache_card(card)
+            except (urllib.error.URLError, ValueError, TimeoutError, KeyError):
+                break
 
 
 def search_cards(query, check):
@@ -78,23 +133,34 @@ def search_cards(query, check):
         return []
     colors = ''.join(check['color_identity']) or 'C'
     filters = f'({query}) legal:commander id<={colors}'
-    request = urllib.request.Request('https://api.scryfall.com/cards/search?' + urllib.parse.urlencode({'q': filters, 'order': 'edhrec'}), headers={'User-Agent': 'MTGVibes/0.4', 'Accept': 'application/json'})
-    with LOCK:
-        global LAST_REQUEST
-        time.sleep(max(0, 0.12 - (time.monotonic() - LAST_REQUEST)))
-        LAST_REQUEST = time.monotonic()
-        with urllib.request.urlopen(request, timeout=20) as response:
-            cards = json.load(response).get('data', [])
-        verified = []
-        for card in cards:
-            CACHE[card['name'].casefold()] = card
-            CACHE_TIMES[card['name'].casefold()] = time.monotonic()
-            # Never trust search syntax to enforce legality by itself.
-            if not addition_errors(card, check):
-                verified.append(card)
-            if len(verified) == 10:
-                break
-        return verified
+    request = urllib.request.Request('https://api.scryfall.com/cards/search?' + urllib.parse.urlencode({'q': filters, 'order': 'edhrec'}), headers={'User-Agent': 'MTGVibes/0.7', 'Accept': 'application/json'})
+    cards = scryfall_json(request).get('data', [])
+    verified = []
+    for card in cards:
+        cache_card(card)
+        if not addition_errors(card, check):
+            verified.append(card)
+        if len(verified) == 10:
+            break
+    return verified
+
+
+def download_card_image(url):
+    for attempt in range(3):
+        try:
+            request = urllib.request.Request(url, headers={'User-Agent': 'MTGVibes/0.7'})
+            with urllib.request.urlopen(request, timeout=8) as response:
+                image = response.read(2000001)
+            if len(image) > 2000000 or not image.startswith(b'\xff\xd8'):
+                raise ValueError('Invalid card image response.')
+            return image
+        except urllib.error.HTTPError as error:
+            if error.code not in (429, 500, 502, 503, 504) or attempt == 2:
+                raise
+        except (urllib.error.URLError, TimeoutError, OSError):
+            if attempt == 2:
+                raise
+        time.sleep(0.4 * (attempt + 1))
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -156,6 +222,7 @@ class Handler(SimpleHTTPRequestHandler):
                 prime_cards(data.get('deck', {}))
                 stats = summarize(data.get('deck', {}), lookup_card)
                 stats['commander_check'], _ = check_deck(data.get('deck', {}), lookup_card)
+                stats['card_data_status'] = 'temporarily_unavailable' if time.monotonic() < SCRYFALL_UNAVAILABLE_UNTIL else 'partial' if stats['unknown_cards'] else 'ready'
                 return self.send_json(200, stats)
             if re.search(r'\b(odds|probability|how often|chance)\b', message, re.I) and (re.search(r'opening.hand odds', message, re.I) or (re.search(r'\b(3|three)\s+lands?\b', message, re.I) and re.search(r'\bspell', message, re.I))):
                 prime_cards(context.get('deck', {}))
@@ -229,11 +296,7 @@ class Handler(SimpleHTTPRequestHandler):
                     download_lock = IMAGE_DOWNLOAD_LOCKS.setdefault(str(path), Lock())
                 with download_lock:
                     if not path.exists():
-                        request = urllib.request.Request(url, headers={'User-Agent': 'MTGVibes/0.2'})
-                        with urllib.request.urlopen(request, timeout=20) as response:
-                            image = response.read(2000001)
-                            if len(image) > 2000000 or not image.startswith(b'\xff\xd8'):
-                                return self.send_json(502, {'error': 'Invalid card image response.'})
+                        image = download_card_image(url)
                         path.write_bytes(image)
                     image = path.read_bytes()
                 self.send_response(200)

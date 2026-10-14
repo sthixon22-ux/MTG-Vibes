@@ -1,5 +1,23 @@
 // Focused deck hubs, artwork customization, and deterministic deck statistics.
 let coverDraft=deck?.coverData || '', deckView='images', statsPending=false;
+const deckDataLoads=new WeakMap();let deckRenderEpoch=0;
+async function loadDeckData(current,force=false){
+ const cached=deckDataLoads.get(current);if(cached?.pending)return cached.pending;if(cached?.result&&!force)return cached.result;
+ const state={};state.pending=(async()=>{
+  const response=await fetch('/api/deck-analysis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({deck:{cards:current.cards,commander:current.commander,partner:current.partner || ''}})});
+  const result=await response.json();if(!response.ok)throw new Error(result.error || 'Could not load card data.');
+  current.statistics=result;current.commanderCheck=result.commander_check;state.result=result;
+  if(deck===current){saveLibrary();renderCommanderCheck();$('#analysis-status').textContent=result.card_data_status==='temporarily_unavailable'?'Scryfall is temporarily unavailable. Use Refresh card data to retry.':result.unknown_cards.length?'Some card details could not be loaded. Use Refresh card data to retry.':'Card data refreshed. Opening-hand odds use exact probabilities.';}
+  return result;
+ })();deckDataLoads.set(current,state);
+ try{return await state.pending;}catch(error){deckDataLoads.delete(current);throw error;}finally{state.pending=null;}
+}
+function galleryImage(name){
+ const image=make('img','');image.alt=name;image.loading='lazy';let attempts=0;
+ const url='/api/card-image?name='+encodeURIComponent(name);image.src=url;
+ image.onload=()=>image.classList.remove('image-failed');
+ image.onerror=()=>{image.classList.add('image-failed');if(attempts<2){attempts++;setTimeout(()=>{if(image.isConnected)image.src=url+'&retry='+Date.now();},attempts*2000);}};return image;
+}
 function renderCommanderCheck(){
  const check=deck?.commanderCheck || deck?.statistics?.commander_check;
  const colorNames={W:'White',U:'Blue',B:'Black',R:'Red',G:'Green'};
@@ -28,16 +46,20 @@ $('#cover-file').onchange=async event=>{
   const bitmap=await createImageBitmap(file);const canvas=document.createElement('canvas');const scale=Math.min(1,640/bitmap.width,480/bitmap.height);canvas.width=Math.round(bitmap.width*scale);canvas.height=Math.round(bitmap.height*scale);canvas.getContext('2d').drawImage(bitmap,0,0,canvas.width,canvas.height);bitmap.close();let data=canvas.toDataURL('image/jpeg',.75);if(data.length>250000)data=canvas.toDataURL('image/jpeg',.4);if(data.length>250000)throw new Error('Image is too detailed. Choose a smaller image.');setCoverDraft(data);$('#import-error').textContent='Artwork selected. Save the deck to keep it.';
  }catch(error){$('#import-error').textContent=error.message || 'This image could not be read.';}
 };
-function renderDeckBrowser(){
+async function renderDeckBrowser(){
+ const epoch=++deckRenderEpoch,current=deck;
  renderCommanderCheck();
  const browser=$('#deck-browser');browser.replaceChildren();const cover=$('#analysis-cover');cover.src=coverSource(deck);cover.hidden=!deck;cover.onerror=()=>{cover.hidden=true;};cover.onload=()=>{cover.hidden=false;};
  if(!deck){browser.append(make('p','Choose a deck from the sidebar or upload your first list.','empty-state'));return;}
  document.querySelectorAll('[data-view]').forEach(button=>{button.classList.toggle('selected',button.dataset.view===deckView);button.setAttribute('aria-pressed',String(button.dataset.view===deckView));});
  if(deckView==='stats'){renderStatistics(browser);return;}
+ if(!deckDataLoads.get(current)?.result)$('#analysis-status').textContent='Loading deck card data…';
+ try{await loadDeckData(current);}catch(error){if(deck===current)$('#analysis-status').textContent=error.message || 'Could not load card data. Use Refresh card data to retry.';}
+ if(deck!==current||epoch!==deckRenderEpoch)return;
  const filter=$('#deck-filter').value.toLowerCase();const cards=deck.cards.filter(c=>c.name.toLowerCase().includes(filter));browser.className='deck-browser '+(deckView==='images'?'image-grid':'text-list');
  cards.forEach(card=>{
   const item=make('button','',deckView==='images'?'gallery-card':'text-card');item.onclick=()=>showCard(card.name);
-  if(deckView==='images'){const image=make('img','');image.alt=card.name;image.loading='lazy';image.src='/api/card-image?name='+encodeURIComponent(card.name);image.onerror=()=>{image.classList.add('image-failed');};item.append(image);}
+  if(deckView==='images'){item.append(galleryImage(card.name));}
   item.append(make('span',`${card.quantity} × ${card.name}`));browser.append(item);
  });
  if(!cards.length)browser.append(make('p','No cards match your search.','muted'));
@@ -55,7 +77,7 @@ function renderStatistics(container){
 async function refreshStatistics(){
  if(!deck||statsPending)return;statsPending=true;const current=deck;$('#refresh-stats').disabled=true;$('#analysis-status').textContent='Fetching card data…';
  renderCommanderCheck();document.querySelectorAll('.identity-banner button').forEach(button=>{button.disabled=true;button.textContent='Checking…';});
- try{const response=await fetch('/api/deck-analysis',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({deck:{cards:current.cards,commander:current.commander,partner:current.partner || ''}})});const result=await response.json();if(!response.ok)throw new Error(result.error);if(deck!==current)return;current.statistics=result;current.commanderCheck=result.commander_check;saveLibrary();$('#analysis-status').textContent=result.unknown_cards.length?'Some card data is missing; incomplete odds are not shown.':'Card data refreshed. Opening-hand odds use exact probabilities.';renderDeckBrowser();}
+ try{await loadDeckData(current,true);if(deck!==current)return;renderDeckBrowser();}
  catch(error){const text=error.message || 'Could not fetch card data. Try again.';$('#analysis-status').textContent=text;if(deck===current)$('#libby-deck-check').append(make('span',text));}
  finally{statsPending=false;$('#refresh-stats').disabled=false;document.querySelectorAll('.identity-banner button').forEach(button=>{button.disabled=false;button.textContent='Check deck';});}
 }
